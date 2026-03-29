@@ -37,7 +37,9 @@ HEADERS = {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
-    )
+    ),
+    "Referer": "https://kabutan.jp/",
+    "Accept-Language": "ja,en-US;q=0.9",
 }
 
 
@@ -57,11 +59,19 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
             soup = BeautifulSoup(res.text, "html.parser")
 
             # テーブル行を探す（複数のセレクタに対応）
-            rows = soup.select(
-                "table.s-news-list tr, "
-                "table.news_list tr, "
-                "#newslist table tr"
-            )
+            SELECTORS = [
+                "table.s-news-list tr",
+                "table.news_list tr",
+                "#newslist table tr",
+                "div#news_list table tr",
+                "div.news_box table tr",
+                "table tr",           # 最後の手段：ページ内の全テーブル行
+            ]
+            rows = []
+            for sel in SELECTORS:
+                rows = soup.select(sel)
+                if rows:
+                    break
 
             for row in rows:
                 tds = row.find_all("td")
@@ -71,6 +81,9 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
                 date_text = tds[0].get_text(strip=True)
                 # ヘッダー行や空行はスキップ
                 if not date_text or date_text in ("日付", "日時", ""):
+                    continue
+                # 日付らしくない行はスキップ（数字が含まれない）
+                if not any(c.isdigit() for c in date_text):
                     continue
 
                 a_tag = tds[-1].find("a")
@@ -111,17 +124,20 @@ def get_stock_price(code: str) -> dict:
     ticker_symbol = f"{code}.T"
     try:
         ticker = yf.Ticker(ticker_symbol)
-        info = ticker.fast_info
-        price      = info.last_price
-        prev_close = info.previous_close
-        if price and prev_close:
-            change     = price - prev_close
-            change_pct = (change / prev_close) * 100
-            return {
-                "price":      round(price, 0),
-                "change":     round(change, 0),
-                "change_pct": round(change_pct, 2),
-            }
+        hist = ticker.history(period="5d")   # 直近5営業日分を取得
+        if hist.empty:
+            print(f"    [警告] {code} の価格データが空です")
+            return {"price": None}
+
+        price      = float(hist["Close"].iloc[-1])
+        prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else float(hist["Open"].iloc[-1])
+        change     = price - prev_close
+        change_pct = (change / prev_close) * 100
+        return {
+            "price":      round(price, 0),
+            "change":     round(change, 0),
+            "change_pct": round(change_pct, 2),
+        }
     except Exception as e:
         print(f"    [警告] {code} の株価取得失敗: {e}")
     return {"price": None}
@@ -134,17 +150,19 @@ def get_wti_price() -> dict:
     """WTI 原油先物（CL=F）の直近価格を取得する"""
     try:
         ticker = yf.Ticker("CL=F")
-        info   = ticker.fast_info
-        price      = info.last_price
-        prev_close = info.previous_close
-        if price and prev_close:
-            change     = price - prev_close
-            change_pct = (change / prev_close) * 100
-            return {
-                "price":      round(price, 2),
-                "change":     round(change, 2),
-                "change_pct": round(change_pct, 2),
-            }
+        hist = ticker.history(period="5d")
+        if hist.empty:
+            return {"price": None, "error": "データが取得できませんでした"}
+
+        price      = float(hist["Close"].iloc[-1])
+        prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else float(hist["Open"].iloc[-1])
+        change     = price - prev_close
+        change_pct = (change / prev_close) * 100
+        return {
+            "price":      round(price, 2),
+            "change":     round(change, 2),
+            "change_pct": round(change_pct, 2),
+        }
     except Exception as e:
         print(f"    [警告] WTI 取得失敗: {e}")
     return {"price": None, "error": "取得できませんでした"}
@@ -222,8 +240,12 @@ def send_email(subject: str, body: str) -> None:
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(EMAIL_FROM, EMAIL_PASSWORD)
+    # アプリパスワードにスペースが混入していても動作するよう除去
+    password = EMAIL_PASSWORD.replace(" ", "")
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(EMAIL_FROM, password)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
     print("メール送信完了")
 
