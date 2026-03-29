@@ -50,8 +50,8 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
     """kabutan.jp の IR・ニュースページから最新情報を取得する"""
     results = []
 
-    # IRニュース → 一般ニュースの順に試みる
-    for path in [f"/stock/irnews?code={code}", f"/stock/news?code={code}"]:
+    # ニュース取得（kabutan.jp /stock/news のみ）
+    for path in [f"/stock/news?code={code}"]:
         url = f"https://kabutan.jp{path}"
         try:
             res = requests.get(url, headers=HEADERS, timeout=15)
@@ -242,9 +242,7 @@ def send_email(subject: str, body: str) -> None:
 
     # アプリパスワードにスペースが混入していても動作するよう除去
     password = EMAIL_PASSWORD.replace(" ", "")
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.ehlo()
-        server.starttls()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(EMAIL_FROM, password)
         server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
     print("メール送信完了")
