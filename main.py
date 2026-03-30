@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """
 IR情報・WTI原油価格 自動通知スクリプト
-毎朝 GitHub Actions で自動実行 → Gmail でメール送信
+毎朝 GitHub Actions で自動実行 → Resend でメール送信
 """
 
 import os
-import smtplib
+import resend
 import requests
 import yfinance as yf
 from datetime import date
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 
 # ============================================================
 # 設定（GitHub Secrets から自動的に読み込まれます）
 # ============================================================
-EMAIL_FROM     = os.environ["EMAIL_FROM"]       # 送信元 Gmail アドレス
-EMAIL_TO       = os.environ["EMAIL_TO"]         # 受信先メールアドレス
-EMAIL_PASSWORD = os.environ["EMAIL_PASSWORD"]   # Gmail アプリパスワード
+resend.api_key     = os.environ["RESEND_API_KEY"]  # Resend API キー
+EMAIL_FROM         = os.environ["EMAIL_FROM"]       # 送信元アドレス
+EMAIL_TO           = os.environ["EMAIL_TO"]         # 受信先メールアドレス
 
 # ============================================================
 # 監視銘柄リスト
@@ -231,20 +229,15 @@ def build_email_body(
 
 
 # ============================================================
-# Gmail 送信
+# Resend 送信
 # ============================================================
 def send_email(subject: str, body: str) -> None:
-    msg = MIMEMultipart()
-    msg["From"]    = EMAIL_FROM
-    msg["To"]      = EMAIL_TO
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-
-    # アプリパスワードにスペースが混入していても動作するよう除去
-    password = EMAIL_PASSWORD.replace(" ", "")
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(EMAIL_FROM, password)
-        server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+    resend.Emails.send({
+        "from":    EMAIL_FROM,
+        "to":      EMAIL_TO,
+        "subject": subject,
+        "text":    body,
+    })
     print("メール送信完了")
 
 
