@@ -233,7 +233,7 @@ def build_email_body(
 # ============================================================
 def send_email(subject: str, body: str) -> None:
     resend.Emails.send({
-        "from":    EMAIL_FROM,
+        "from":    "onboarding@resend.dev",
         "to":      EMAIL_TO,
         "subject": subject,
         "text":    body,
