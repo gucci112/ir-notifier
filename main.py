@@ -4,9 +4,8 @@ IR情報・WTI原油価格 自動通知スクリプト
 毎朝 GitHub Actions で自動実行 → Resend でメール送信
 """
 
-import io
 import os
-import csv
+import json
 import resend
 import requests
 from datetime import date
@@ -115,31 +114,39 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
 
 
 # ============================================================
-# stooq.com から CSV で価格取得（共通）
+# Yahoo Finance API から価格取得（共通）
 # ============================================================
-def _fetch_stooq(symbol: str) -> list:
-    """stooq.com の日足CSVを取得し、行リストを返す（新しい順）"""
-    url = f"https://stooq.com/q/d/l/?s={symbol}&i=d"
-    res = requests.get(url, timeout=15)
+_YF_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
+def _fetch_yahoo(symbol: str) -> list:
+    """Yahoo Finance API から直近5日の終値リストを返す"""
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
+    res = requests.get(url, headers=_YF_HEADERS, timeout=15)
     res.raise_for_status()
-    reader = csv.DictReader(io.StringIO(res.text))
-    rows = [r for r in reader if r.get("Close") and r["Close"] != "null"]
-    return rows  # 古い順。末尾が最新
+    data = res.json()
+    closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+    return [c for c in closes if c is not None]
 
 
 # ============================================================
-# 株価取得（stooq.com）
+# 株価取得（Yahoo Finance API）
 # ============================================================
 def get_stock_price(code: str) -> dict:
-    """stooq.com で現在株価・前日比を取得する（東証: コード.jp）"""
+    """Yahoo Finance API で現在株価・前日比を取得する（東証: コード.T）"""
     try:
-        rows = _fetch_stooq(f"{code}.jp")
-        if len(rows) < 1:
+        closes = _fetch_yahoo(f"{code}.T")
+        if not closes:
             print(f"    [警告] {code} の価格データが空です")
             return {"price": None}
 
-        price      = float(rows[-1]["Close"])
-        prev_close = float(rows[-2]["Close"]) if len(rows) >= 2 else price
+        price      = closes[-1]
+        prev_close = closes[-2] if len(closes) >= 2 else price
         change     = price - prev_close
         change_pct = (change / prev_close) * 100
         return {
@@ -153,17 +160,17 @@ def get_stock_price(code: str) -> dict:
 
 
 # ============================================================
-# WTI 原油先物価格取得（stooq.com）
+# WTI 原油先物価格取得（Yahoo Finance API）
 # ============================================================
 def get_wti_price() -> dict:
-    """WTI 原油先物（CL.F）の直近価格を取得する"""
+    """WTI 原油先物（CL=F）の直近価格を取得する"""
     try:
-        rows = _fetch_stooq("cl.f")
-        if len(rows) < 1:
+        closes = _fetch_yahoo("CL%3DF")
+        if not closes:
             return {"price": None, "error": "データが取得できませんでした"}
 
-        price      = float(rows[-1]["Close"])
-        prev_close = float(rows[-2]["Close"]) if len(rows) >= 2 else price
+        price      = closes[-1]
+        prev_close = closes[-2] if len(closes) >= 2 else price
         change     = price - prev_close
         change_pct = (change / prev_close) * 100
         return {
