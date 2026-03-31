@@ -5,19 +5,23 @@ IR情報・WTI原油価格 自動通知スクリプト
 """
 
 import os
+import re
+import io
 import json
+import zipfile
 import xml.etree.ElementTree as ET
 import resend
 import requests
-from datetime import date
+from datetime import date, timedelta
 from bs4 import BeautifulSoup
 
 # ============================================================
 # 設定（GitHub Secrets から自動的に読み込まれます）
 # ============================================================
-resend.api_key     = os.environ["RESEND_API_KEY"]  # Resend API キー
-EMAIL_FROM         = os.environ["EMAIL_FROM"]       # 送信元アドレス
-EMAIL_TO           = os.environ["EMAIL_TO"]         # 受信先メールアドレス
+resend.api_key     = os.environ["RESEND_API_KEY"]          # Resend API キー
+EMAIL_FROM         = os.environ["EMAIL_FROM"]               # 送信元アドレス
+EMAIL_TO           = os.environ["EMAIL_TO"]                 # 受信先メールアドレス
+EDINET_API_KEY     = os.environ.get("EDINET_API_KEY", "")  # EDINET API キー（任意）
 
 # ============================================================
 # 監視銘柄リスト
@@ -40,6 +44,200 @@ HEADERS = {
     "Referer": "https://kabutan.jp/",
     "Accept-Language": "ja,en-US;q=0.9",
 }
+
+
+# ============================================================
+# EDINET v2 API → 四半期報告書の決算進捗
+# ============================================================
+_EDINET_BASE = "https://disclosure.edinet-fsa.go.jp/api/v2"
+_XBRL_NS     = "http://www.xbrl.org/2003/instance"
+_XSI_NIL     = "{http://www.w3.org/2001/XMLSchema-instance}nil"
+
+# XBRL 要素名セット（複数の命名規則に対応）
+_XBRL_ELEMS = {
+    "sales": {
+        "NetSalesSummaryOfBusinessResults", "NetSales",
+        "Revenues", "OperatingRevenues",
+    },
+    "op_income": {
+        "OperatingIncomeLossSummaryOfBusinessResults",
+        "OperatingIncome", "OperatingIncomeLoss",
+    },
+    "net_income": {
+        "ProfitLossAttributableToOwnersOfParentSummaryOfBusinessResults",
+        "ProfitLossAttributableToOwnersOfParent", "ProfitLoss",
+    },
+    "sales_fc": {"NetSalesForecastSummaryOfBusinessResults"},
+    "op_fc": {
+        "OperatingIncomeLossForecastSummaryOfBusinessResults",
+        "OperatingIncomeForecastSummaryOfBusinessResults",
+    },
+    "net_fc": {
+        "ProfitLossAttributableToOwnersOfParentForecastSummaryOfBusinessResults",
+    },
+}
+
+
+def _edinet_headers() -> dict:
+    return {"Ocp-Apim-Subscription-Key": EDINET_API_KEY}
+
+
+def _edinet_doc_list(date_str: str) -> list:
+    """指定日に提出された書類一覧を返す"""
+    try:
+        res = requests.get(
+            f"{_EDINET_BASE}/documents.json",
+            params={"date": date_str, "type": 2},
+            headers=_edinet_headers(),
+            timeout=30,
+        )
+        res.raise_for_status()
+        data = res.json()
+        if data.get("statusCode") == 401:
+            return []
+        return data.get("results") or []
+    except Exception:
+        return []
+
+
+def _find_quarterly_docs(codes4: list) -> dict:
+    """各4桁証券コードの最新四半期報告書（docTypeCode=120）を最大90日遡って検索"""
+    found, today = {}, date.today()
+    for delta in range(90):
+        if len(found) == len(codes4):
+            break
+        d = (today - timedelta(days=delta)).strftime("%Y-%m-%d")
+        for doc in _edinet_doc_list(d):
+            sec = (doc.get("secCode") or "")[:4]
+            if sec in codes4 and sec not in found and doc.get("docTypeCode") == "120":
+                found[sec] = doc
+    return found
+
+
+def _fetch_xbrl_text(doc_id: str) -> str:
+    """EDINET書類ZIPをダウンロードし、最大のXBRLインスタンス文書を返す"""
+    res = requests.get(
+        f"{_EDINET_BASE}/documents/{doc_id}",
+        params={"type": 1},
+        headers=_edinet_headers(),
+        timeout=60,
+    )
+    res.raise_for_status()
+    with zipfile.ZipFile(io.BytesIO(res.content)) as z:
+        candidates = [n for n in z.namelist()
+                      if n.endswith(".xbrl") and "PublicDoc" in n]
+        if not candidates:
+            candidates = [n for n in z.namelist() if n.endswith(".xbrl")]
+        if not candidates:
+            return ""
+        biggest = max(candidates, key=lambda n: z.getinfo(n).file_size)
+        return z.read(biggest).decode("utf-8", errors="replace")
+
+
+def _parse_xbrl(xbrl: str) -> dict:
+    """XBRLから売上高・営業利益・純利益（当期累計実績・通期予想）を抽出"""
+    try:
+        root = ET.fromstring(xbrl)
+    except ET.ParseError:
+        return {}
+
+    # コンテキスト分類
+    actual_ctx, forecast_ctx = set(), set()
+    for ctx in root.findall(f"{{{_XBRL_NS}}}context"):
+        cid = ctx.get("id", "")
+        if "Forecast" in cid:
+            forecast_ctx.add(cid)
+        elif re.search(r"CurrentAccumulated|CurrentYear", cid) and "Prior" not in cid:
+            actual_ctx.add(cid)
+    # フォールバック: "Current" を含み Prior/Forecast でないもの
+    if not actual_ctx:
+        for ctx in root.findall(f"{{{_XBRL_NS}}}context"):
+            cid = ctx.get("id", "")
+            if "Current" in cid and "Forecast" not in cid and "Prior" not in cid:
+                actual_ctx.add(cid)
+
+    # 四半期番号を推定
+    quarter = None
+    for cid in actual_ctx:
+        m = re.search(r"Q([123])", cid)
+        if m:
+            quarter = f"Q{m.group(1)}"
+            break
+
+    out: dict = {"quarter": quarter}
+
+    for elem in root.iter():
+        if elem.get(_XSI_NIL) == "true":
+            continue
+        local   = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        ctx_ref = elem.get("contextRef", "")
+        try:
+            val = float(elem.text.strip())
+        except (ValueError, AttributeError, TypeError):
+            continue
+
+        for key, names in _XBRL_ELEMS.items():
+            if key in out or local not in names:
+                continue
+            is_fc = key.endswith("_fc")
+            if is_fc and ctx_ref in forecast_ctx:
+                out[key] = val
+                break
+            elif not is_fc and ctx_ref in actual_ctx:
+                out[key] = val
+                break
+
+    return out
+
+
+def _judge(progress_pct: float, quarter: str) -> str:
+    """進捗率と四半期ペースから ○△× を判定"""
+    pace = {"Q1": 25.0, "Q2": 50.0, "Q3": 75.0}.get(quarter, 100.0)
+    diff = progress_pct - pace
+    if diff >= -5.0:
+        return "○"
+    elif diff >= -15.0:
+        return "△"
+    else:
+        return "×"
+
+
+def get_edinet_financials(stocks: list) -> list:
+    """監視銘柄の四半期報告書から決算進捗データを取得"""
+    if not EDINET_API_KEY:
+        return []
+    codes4 = [s["code"][:4] for s in stocks]
+    print("  EDINET 四半期報告書を検索中 (最大90日遡り)...")
+    docs_map = _find_quarterly_docs(codes4)
+
+    results = []
+    for stock in stocks:
+        c4    = stock["code"][:4]
+        doc   = docs_map.get(c4)
+        entry: dict = {"stock": stock, "doc": doc}
+
+        if not doc:
+            entry["error"] = "四半期報告書が見つかりませんでした"
+            results.append(entry)
+            continue
+
+        print(f"    [{stock['code']}] XBRL取得中 ({doc['docID']})...")
+        try:
+            xbrl_text = _fetch_xbrl_text(doc["docID"])
+        except Exception as e:
+            entry["error"] = f"XBRL取得失敗: {e}"
+            results.append(entry)
+            continue
+
+        if not xbrl_text:
+            entry["error"] = "XBRLファイルが見つかりませんでした"
+            results.append(entry)
+            continue
+
+        entry["financials"] = _parse_xbrl(xbrl_text)
+        results.append(entry)
+
+    return results
 
 
 # ============================================================
@@ -243,6 +441,7 @@ def build_email_body(
     stock_data: list,
     wti: dict,
     world_news: list,
+    edinet_data: list,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -309,6 +508,43 @@ def build_email_body(
                 lines.append(f"           {n['url']}")
         lines.append("")
 
+    # --- 決算進捗（EDINET 四半期報告書）---
+    if edinet_data:
+        lines.append("▼ 決算進捗（EDINET 四半期報告書）")
+        for entry in edinet_data:
+            stock = entry["stock"]
+            doc   = entry.get("doc") or {}
+            fin   = entry.get("financials") or {}
+            q     = fin.get("quarter") or "?"
+            period = (doc.get("periodEnd") or "")[:7]
+            lines.append(f"  {stock['name']}（{stock['code']}）  {q} 期末:{period}")
+            if entry.get("error"):
+                lines.append(f"    ※ {entry['error']}")
+            else:
+                for label, ak, fk in [
+                    ("売上高",   "sales",      "sales_fc"),
+                    ("営業利益", "op_income",  "op_fc"),
+                    ("純利益",   "net_income", "net_fc"),
+                ]:
+                    actual = fin.get(ak)
+                    fc     = fin.get(fk)
+                    if actual is None:
+                        lines.append(f"    {label}: データなし")
+                        continue
+                    a_oku = actual / 1e8
+                    if fc:
+                        prog  = actual / fc * 100
+                        judge = _judge(prog, q)
+                        lines.append(
+                            f"    {label}: {a_oku:>8,.1f}億円 /"
+                            f" 予想{fc/1e8:,.1f}億円  ({prog:.1f}%) {judge}"
+                        )
+                    else:
+                        lines.append(f"    {label}: {a_oku:>8,.1f}億円  (通期予想なし)")
+            lines.append("")
+        lines.append("=" * 52)
+        lines.append("")
+
     lines.append("─" * 52)
     lines.append("このメールは自動送信されています。")
     return "\n".join(lines)
@@ -352,10 +588,17 @@ def main():
     print("  アルジャジーラRSSを取得中...")
     world_news = get_aljazeera_news()
 
+    # 決算進捗取得（EDINET APIキーが設定されている場合のみ）
+    if EDINET_API_KEY:
+        edinet_data = get_edinet_financials(STOCKS)
+    else:
+        print("  EDINET_API_KEY 未設定のため決算進捗をスキップ")
+        edinet_data = []
+
     # メール組み立て・送信
     today   = date.today().strftime("%Y/%m/%d")
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
-    body    = build_email_body(stock_data, wti, world_news)
+    body    = build_email_body(stock_data, wti, world_news, edinet_data)
 
     print("メールを送信中...")
     send_email(subject, body)
