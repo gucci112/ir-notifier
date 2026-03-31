@@ -301,8 +301,48 @@ def get_aljazeera_news(max_items: int = 7) -> list:
 # ============================================================
 # バフェット指標取得（kabutan.jp /stock/finance）
 # ============================================================
+def _extract_col_value(table, col_keywords: list) -> float | None:
+    """テーブルのヘッダー行からキーワードが一致する列を探し、最新実績行の値を返す。
+    kabutan.jp は「ヘッダー行 → データ行」の縦持ち構造。全角/半角どちらにも対応。"""
+    rows = table.find_all("tr")
+    if not rows:
+        return None
+
+    # ヘッダー行から対象列インデックスを探す
+    header_cells = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+    col_idx = None
+    for i, h in enumerate(header_cells):
+        # 全角→半角に正規化して比較
+        h_norm = h.replace("Ｒ", "R").replace("Ｏ", "O").replace("Ｅ", "E")
+        if any(kw in h or kw in h_norm for kw in col_keywords):
+            col_idx = i
+            break
+    if col_idx is None:
+        return None
+
+    # データ行を逆順に走査し、最新の実績値（予想行・空行を除く）を返す
+    for row in reversed(rows[1:]):
+        cells = row.find_all(["th", "td"])
+        if not cells or col_idx >= len(cells):
+            continue
+        first = cells[0].get_text(strip=True)
+        if first.startswith("予") or not first:
+            continue
+        raw = (cells[col_idx].get_text(strip=True)
+               .replace("%", "").replace(",", "")
+               .replace("－", "").replace("―", "").strip())
+        if not raw:
+            continue
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return None
+
+
 def get_financial_data(code: str) -> dict:
-    """kabutan.jp の財務ページから ROE・自己資本比率を取得する"""
+    """kabutan.jp の財務ページから ROE・自己資本比率を取得する。
+    ROEは収益性テーブル（ヘッダー: ＲＯＥ）、自己資本比率は財務テーブルから取得。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
     try:
         res = requests.get(url, headers=HEADERS, timeout=15)
@@ -313,27 +353,19 @@ def get_financial_data(code: str) -> dict:
         equity_ratio = None
 
         for table in soup.find_all("table"):
-            for row in table.find_all("tr"):
-                cells = row.find_all(["th", "td"])
-                for i, cell in enumerate(cells):
-                    label = cell.get_text(strip=True)
-                    if i + 1 >= len(cells):
-                        continue
-                    raw = (cells[i + 1].get_text(strip=True)
-                           .replace("%", "").replace("－", "").replace("―", "").strip())
+            header_text = " ".join(
+                c.get_text(strip=True) for c in (table.find("tr") or []).find_all(["th", "td"])
+            ) if table.find("tr") else ""
 
-                    if "ROE" in label and roe is None:
-                        try:
-                            roe = float(raw)
-                        except ValueError:
-                            pass
+            # ROEテーブル: ヘッダーに「ＲＯＥ」または「ROE」がある
+            if roe is None and ("ＲＯＥ" in header_text or "ROE" in header_text):
+                roe = _extract_col_value(table, ["ＲＯＥ", "ROE"])
 
-                    if "自己資本比率" in label and equity_ratio is None:
-                        try:
-                            equity_ratio = float(raw)
-                        except ValueError:
-                            pass
+            # 自己資本比率テーブル: ヘッダーに「自己資本比率」がある
+            if equity_ratio is None and "自己資本比率" in header_text:
+                equity_ratio = _extract_col_value(table, ["自己資本比率"])
 
+        print(f"    財務データ: ROE={roe} 自己資本比率={equity_ratio}")
         return {"roe": roe, "equity_ratio": equity_ratio}
 
     except Exception as e:
