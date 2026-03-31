@@ -6,6 +6,7 @@ IR情報・WTI原油価格 自動通知スクリプト
 
 import os
 import json
+import xml.etree.ElementTree as ET
 import resend
 import requests
 from datetime import date
@@ -39,6 +40,58 @@ HEADERS = {
     "Referer": "https://kabutan.jp/",
     "Accept-Language": "ja,en-US;q=0.9",
 }
+
+
+# ============================================================
+# アルジャジーラ RSS → 世界情勢ニュース抽出
+# ============================================================
+_WORLD_KEYWORDS = [
+    # 経済・金融
+    "economy", "economic", "inflation", "recession", "gdp", "debt", "trade",
+    "tariff", "sanction", "dollar", "currency", "market", "finance", "financial",
+    "bank", "interest rate", "federal reserve", "central bank", "imf",
+    "investment", "bond", "deficit", "surplus", "export", "import",
+    # エネルギー
+    "oil", "gas", "energy", "opec", "crude", "petroleum", "fuel", "nuclear",
+    "pipeline", "lng", "electricity", "renewable",
+    # 地政学リスク
+    "war", "conflict", "tension", "crisis", "military", "attack", "ceasefire",
+    "missile", "protest", "coup", "nato", "troops", "invasion", "occupation",
+    "blockade", "embargo", "strait", "geopolit", "escalat", "airstrike",
+    "sanction", "alliance", "treaty",
+]
+
+def get_aljazeera_news(max_items: int = 7) -> list:
+    """アルジャジーラRSSから経済・エネルギー・地政学ニュースをスコアリングして返す"""
+    url = "https://www.aljazeera.com/xml/rss/all.xml"
+    try:
+        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        res.raise_for_status()
+        root = ET.fromstring(res.content)
+
+        scored = []
+        for item in root.findall(".//item"):
+            title    = (item.findtext("title")    or "").strip()
+            link     = (item.findtext("link")     or "").strip()
+            pub_date = (item.findtext("pubDate")  or "").strip()
+            desc     = (item.findtext("description") or "").strip()
+
+            text  = (title + " " + desc).lower()
+            score = sum(1 for kw in _WORLD_KEYWORDS if kw in text)
+            if score > 0:
+                scored.append({
+                    "score":    score,
+                    "title":    title,
+                    "url":      link,
+                    "pub_date": pub_date,
+                })
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:max_items]
+
+    except Exception as e:
+        print(f"    [警告] アルジャジーラRSS取得失敗: {e}")
+    return []
 
 
 # ============================================================
@@ -189,6 +242,7 @@ def get_wti_price() -> dict:
 def build_email_body(
     stock_data: list,
     wti: dict,
+    world_news: list,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -196,6 +250,21 @@ def build_email_body(
         "=" * 52,
         "",
     ]
+
+    # --- 世界情勢（Al Jazeera） ---
+    lines.append("▼ 世界情勢（Al Jazeera）")
+    if world_news:
+        for n in world_news:
+            lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}")
+            lines.append(f"  {n['title']}")
+            if n["url"]:
+                lines.append(f"  {n['url']}")
+            lines.append("")
+    else:
+        lines.append("  ニュースを取得できませんでした")
+        lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
 
     # --- WTI 原油価格 ---
     lines.append("▼ WTI 原油先物価格（ドル/バレル）")
@@ -279,10 +348,14 @@ def main():
     print("  WTI 原油価格を取得中...")
     wti = get_wti_price()
 
+    # 世界情勢ニュース取得
+    print("  アルジャジーラRSSを取得中...")
+    world_news = get_aljazeera_news()
+
     # メール組み立て・送信
     today   = date.today().strftime("%Y/%m/%d")
-    subject = f"[IR通知] {today} 銘柄ニュース・WTI価格"
-    body    = build_email_body(stock_data, wti)
+    subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
+    body    = build_email_body(stock_data, wti, world_news)
 
     print("メールを送信中...")
     send_email(subject, body)
