@@ -232,14 +232,17 @@ def build_email_body(
 # Resend 送信
 # ============================================================
 def send_email(subject: str, body: str) -> None:
+    html_body = "<html><head><meta charset='UTF-8'></head><body><pre>" \
+                + body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") \
+                + "</pre></body></html>"
     resend.Emails.send({
         "from":    "onboarding@resend.dev",
         "to":      EMAIL_TO,
         "subject": subject,
         "text":    body,
+        "html":    html_body,
     })
     print("メール送信完了")
-
 
 # ============================================================
 # メイン処理
