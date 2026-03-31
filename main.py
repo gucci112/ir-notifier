@@ -449,8 +449,50 @@ _COL_VOLUME = 8
 _COL_PER    = 9
 
 
+def _get_op_profit(code: str) -> float | None:
+    """kabutan.jp 業績ページから最新期（実績）の営業利益を取得（百万円単位）"""
+    url = f"https://kabutan.jp/stock/finance?code={code}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            header = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
+            if "営業益" not in header:
+                continue
+            op_col = header.index("営業益")
+            # 実績行を逆順に走査して最新の値を取得（予・前期比行を除外）
+            for row in reversed(rows[1:]):
+                cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
+                if not cells or not cells[0]:
+                    continue
+                period = cells[0]
+                if period.startswith("予") or "前期比" in period:
+                    continue
+                if len(cells) > op_col:
+                    val = cells[op_col].replace(",", "")
+                    if val and val not in ("－", ""):
+                        try:
+                            return float(val)
+                        except ValueError:
+                            pass
+    except Exception as e:
+        print(f"    [警告] {code} 営業利益取得失敗: {e}")
+    return None
+
+
 def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
-    """出来高急増ランキングからPER≤15・株価≤1000・東Ｇ/東Ｓ銘柄を抽出"""
+    """出来高急増ランキングから条件合致銘柄を抽出
+
+    フィルター条件:
+      - 東証グロース / スタンダード
+      - 株価 1000円以下
+      - PER: 0 < PER ≤ 15（"－"=赤字・PER>60=実質赤字水準も除外）
+      - 営業利益（直近通期実績）がプラスであること
+    """
     results = []
 
     for page in range(1, max_pages + 1):
@@ -471,12 +513,10 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
                 continue
             raw = [td.get_text(strip=True) for td in tds]
 
-            # コード列が4桁（英数混在含む）であることを確認
             if not re.match(r'^\d{4}[A-Z]?$', raw[_COL_CODE]):
                 continue
             page_has_data = True
 
-            # 銘柄名は <th> タグから取得
             th = row.find("th")
             name = th.get_text(strip=True) if th else raw[_COL_CODE]
 
@@ -491,14 +531,19 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             if price > 1000:
                 continue
 
+            # PERフィルター:
+            #   "－" → 赤字（当期純損失のためPER算出不可）→ 除外
+            #   PER ≤ 0 → 赤字 → 除外
+            #   PER > 60 → 実質赤字水準（極小利益）→ 除外
+            #   PER > 15 → スクリーニング条件外 → 除外
             per_raw = raw[_COL_PER].replace(",", "")
-            if per_raw in ("－", "", "N/A"):
+            if per_raw in ("－", "", "N/A"):  # 赤字でPER算出不可
                 continue
             try:
                 per = float(per_raw)
             except ValueError:
                 continue
-            if per <= 0 or per > 15:
+            if per <= 0 or per > 15:  # 赤字 or 条件外（60倍超も含む）
                 continue
 
             try:
@@ -506,13 +551,25 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             except ValueError:
                 volume = 0
 
+            # 営業利益チェック（赤字企業の除外）
+            code = raw[_COL_CODE]
+            op_profit = _get_op_profit(code)
+            if op_profit is not None and op_profit <= 0:
+                print(f"    [{code}] {name} 営業利益マイナス({op_profit:,.0f}百万円) → 除外")
+                continue
+
+            op_label = (
+                f"{op_profit:+,.0f}百万円" if op_profit is not None else "確認不可"
+            )
+
             results.append({
-                "code":        raw[_COL_CODE],
+                "code":        code,
                 "name":        name,
                 "market":      market,
                 "price":       price,
                 "per":         per,
                 "volume":      volume,
+                "op_profit":   op_label,
                 "stop_loss":   round(price * 0.92, 1),
                 "take_profit": round(price * 1.25, 1),
             })
@@ -648,6 +705,7 @@ def build_email_body(
             lines.append("  ----")
             lines.append(f"  【{s['code']}】{s['name']}（{mkt}）")
             lines.append(f"  株価：{s['price']:,.0f}円  PER：{s['per']:.1f}倍  出来高：{s['volume']:,}")
+            lines.append(f"  営業利益（直近通期）：{s['op_profit']}")
             lines.append(f"  損切：▼{s['stop_loss']:,.1f}円 / 利確：▲{s['take_profit']:,.1f}円")
         lines.append("  ----")
     else:
