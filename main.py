@@ -643,18 +643,13 @@ def build_email_body(
     lines.append("  ※ 損切ライン = 取得想定価格 -8%  /  利確ライン = +25%")
     lines.append("")
     if screened:
-        lines.append(f"  {'コード':<6} {'銘柄名':<14} {'市場':<9} {'株価':>6} {'PER':>6} {'出来高':>12}  {'損切':>8}  {'利確':>8}")
-        lines.append("  " + "─" * 68)
         for s in screened:
             mkt = "グロース" if "東Ｇ" in s["market"] else "スタンダード"
-            lines.append(
-                f"  {s['code']:<6} {s['name']:<14} {mkt:<9}"
-                f" {s['price']:>6,.0f}円"
-                f" {s['per']:>5.1f}倍"
-                f" {s['volume']:>12,}"
-                f"  ▼{s['stop_loss']:>7,.1f}円"
-                f"  ▲{s['take_profit']:>7,.1f}円"
-            )
+            lines.append("  ----")
+            lines.append(f"  【{s['code']}】{s['name']}（{mkt}）")
+            lines.append(f"  株価：{s['price']:,.0f}円  PER：{s['per']:.1f}倍  出来高：{s['volume']:,}")
+            lines.append(f"  損切：▼{s['stop_loss']:,.1f}円 / 利確：▲{s['take_profit']:,.1f}円")
+        lines.append("  ----")
     else:
         lines.append("  本日の条件合致銘柄はありませんでした")
     lines.append("")
