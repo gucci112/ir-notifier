@@ -45,6 +45,12 @@ HEADERS = {
     "Accept-Language": "ja,en-US;q=0.9",
 }
 
+# ============================================================
+# バフェット指標スクリーニング 閾値
+# ============================================================
+ROE_MIN          = 15.0   # ROE 15% 以上
+EQUITY_RATIO_MIN = 40.0   # 自己資本比率 40% 以上
+
 
 # ============================================================
 # EDINET v2 API → 四半期報告書の決算進捗
@@ -290,6 +296,58 @@ def get_aljazeera_news(max_items: int = 7) -> list:
     except Exception as e:
         print(f"    [警告] アルジャジーラRSS取得失敗: {e}")
     return []
+
+
+# ============================================================
+# バフェット指標取得（kabutan.jp /stock/finance）
+# ============================================================
+def get_financial_data(code: str) -> dict:
+    """kabutan.jp の財務ページから ROE・自己資本比率を取得する"""
+    url = f"https://kabutan.jp/stock/finance?code={code}"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=15)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+
+        roe          = None
+        equity_ratio = None
+
+        for table in soup.find_all("table"):
+            for row in table.find_all("tr"):
+                cells = row.find_all(["th", "td"])
+                for i, cell in enumerate(cells):
+                    label = cell.get_text(strip=True)
+                    if i + 1 >= len(cells):
+                        continue
+                    raw = (cells[i + 1].get_text(strip=True)
+                           .replace("%", "").replace("－", "").replace("―", "").strip())
+
+                    if "ROE" in label and roe is None:
+                        try:
+                            roe = float(raw)
+                        except ValueError:
+                            pass
+
+                    if "自己資本比率" in label and equity_ratio is None:
+                        try:
+                            equity_ratio = float(raw)
+                        except ValueError:
+                            pass
+
+        return {"roe": roe, "equity_ratio": equity_ratio}
+
+    except Exception as e:
+        print(f"    [警告] {code} の財務データ取得失敗: {e}")
+        return {"roe": None, "equity_ratio": None}
+
+
+def passes_buffett_screen(financials: dict) -> bool:
+    """ROE >= 15% かつ 自己資本比率 >= 40% で通過"""
+    roe = financials.get("roe")
+    eq  = financials.get("equity_ratio")
+    if roe is None or eq is None:
+        return False
+    return roe >= ROE_MIN and eq >= EQUITY_RATIO_MIN
 
 
 # ============================================================
@@ -629,14 +687,41 @@ def build_email_body(
     lines.append("=" * 52)
     lines.append("")
 
-    # --- 各銘柄 ---
+    # --- バフェット指標スクリーニング サマリー ---
+    lines.append(f"▼ バフェット指標スクリーニング（監視6銘柄）")
+    lines.append(f"  条件: ROE {ROE_MIN:.0f}%以上 かつ 自己資本比率 {EQUITY_RATIO_MIN:.0f}%以上")
+    lines.append("")
+    passed_items = [d for d in stock_data if d.get("buffett_passed")]
+    failed_items = [d for d in stock_data if not d.get("buffett_passed")]
+    if passed_items:
+        lines.append("  ✔ 通過:")
+        for d in passed_items:
+            f = d["buffett"]
+            roe_s = f"{f['roe']}%" if f["roe"] is not None else "取得不可"
+            eq_s  = f"{f['equity_ratio']}%" if f["equity_ratio"] is not None else "取得不可"
+            lines.append(f"    {d['stock']['name']}（{d['stock']['code']}）  ROE:{roe_s} / 自己資本比率:{eq_s}")
+    if failed_items:
+        lines.append("  ✘ 不通過:")
+        for d in failed_items:
+            f = d["buffett"]
+            roe_s = f"{f['roe']}%" if f["roe"] is not None else "取得不可"
+            eq_s  = f"{f['equity_ratio']}%" if f["equity_ratio"] is not None else "取得不可"
+            lines.append(f"    {d['stock']['name']}（{d['stock']['code']}）  ROE:{roe_s} / 自己資本比率:{eq_s}")
+    lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
+
+    # --- 各銘柄（通過銘柄のみ詳細表示） ---
     for item in stock_data:
         stock  = item["stock"]
         price  = item["price"]
         news   = item["news"]
+        passed = item.get("buffett_passed", False)
+
+        if not passed:
+            continue
 
         # 株価
-        price_str = ""
         if price.get("price"):
             sign = "+" if price["change"] >= 0 else ""
             price_str = (
@@ -646,7 +731,7 @@ def build_email_body(
         else:
             price_str = "  株価: 取得できませんでした"
 
-        lines.append(f"▼ {stock['name']}（{stock['code']}）")
+        lines.append(f"▼ {stock['name']}（{stock['code']}） ✔")
         lines.append(price_str)
         lines.append("")
 
@@ -745,9 +830,16 @@ def main():
     stock_data = []
     for stock in STOCKS:
         print(f"  [{stock['code']}] {stock['name']} を取得中...")
-        price = get_stock_price(stock["code"])
-        news  = get_stock_news(stock["code"])
-        stock_data.append({"stock": stock, "price": price, "news": news})
+        buffett    = get_financial_data(stock["code"])
+        passed     = passes_buffett_screen(buffett)
+        price      = get_stock_price(stock["code"])
+        news       = get_stock_news(stock["code"]) if passed else []
+        print(f"    バフェット: {'✔ 通過' if passed else '✘ 不通過'} "
+              f"ROE={buffett['roe']} 自己資本比率={buffett['equity_ratio']}")
+        stock_data.append({
+            "stock": stock, "buffett": buffett, "buffett_passed": passed,
+            "price": price, "news": news,
+        })
 
     # WTI 価格取得
     print("  WTI 原油価格を取得中...")
