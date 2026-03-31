@@ -435,6 +435,98 @@ def get_wti_price() -> dict:
 
 
 # ============================================================
+# 銘柄スクリーニング（kabutan.jp 出来高急増ランキング）
+# ============================================================
+_SCREEN_URL = "https://kabutan.jp/warning/?mode=2_1&market=0&page={page}"
+
+# カラム定義（td要素のみ 12列）
+# [コード, 市場, ガイヨウ, チャート, 株価, S印, 前日比, 前日比%, 出来高, PER, PBR, 配当]
+# ※ 銘柄名は <th> タグから別途取得
+_COL_CODE   = 0
+_COL_MARKET = 1
+_COL_PRICE  = 4
+_COL_VOLUME = 8
+_COL_PER    = 9
+
+
+def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
+    """出来高急増ランキングからPER≤15・株価≤1000・東Ｇ/東Ｓ銘柄を抽出"""
+    results = []
+
+    for page in range(1, max_pages + 1):
+        url = _SCREEN_URL.format(page=page)
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=15)
+            res.raise_for_status()
+        except Exception as e:
+            print(f"    [警告] スクリーニング page={page} 取得失敗: {e}")
+            break
+
+        soup = BeautifulSoup(res.text, "html.parser")
+        page_has_data = False
+
+        for row in soup.select("table tr"):
+            tds = row.find_all("td")
+            if len(tds) < 12:
+                continue
+            raw = [td.get_text(strip=True) for td in tds]
+
+            # コード列が4桁（英数混在含む）であることを確認
+            if not re.match(r'^\d{4}[A-Z]?$', raw[_COL_CODE]):
+                continue
+            page_has_data = True
+
+            # 銘柄名は <th> タグから取得
+            th = row.find("th")
+            name = th.get_text(strip=True) if th else raw[_COL_CODE]
+
+            market = raw[_COL_MARKET]
+            if "東Ｇ" not in market and "東Ｓ" not in market:
+                continue
+
+            try:
+                price = float(raw[_COL_PRICE].replace(",", ""))
+            except ValueError:
+                continue
+            if price > 1000:
+                continue
+
+            per_raw = raw[_COL_PER].replace(",", "")
+            if per_raw in ("－", "", "N/A"):
+                continue
+            try:
+                per = float(per_raw)
+            except ValueError:
+                continue
+            if per <= 0 or per > 15:
+                continue
+
+            try:
+                volume = int(raw[_COL_VOLUME].replace(",", ""))
+            except ValueError:
+                volume = 0
+
+            results.append({
+                "code":        raw[_COL_CODE],
+                "name":        name,
+                "market":      market,
+                "price":       price,
+                "per":         per,
+                "volume":      volume,
+                "stop_loss":   round(price * 0.92, 1),
+                "take_profit": round(price * 1.25, 1),
+            })
+
+            if len(results) >= max_results:
+                return results
+
+        if not page_has_data:
+            break
+
+    return results
+
+
+# ============================================================
 # メール本文の組み立て
 # ============================================================
 def build_email_body(
@@ -442,6 +534,7 @@ def build_email_body(
     wti: dict,
     world_news: list,
     edinet_data: list,
+    screened: list,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -545,6 +638,29 @@ def build_email_body(
         lines.append("=" * 52)
         lines.append("")
 
+    # --- 銘柄スクリーニング ---
+    lines.append("▼ 銘柄スクリーニング（出来高急増 × PER≤15 × 株価≤1000 × 東Ｇ/東Ｓ）")
+    lines.append("  ※ 損切ライン = 取得想定価格 -8%  /  利確ライン = +25%")
+    lines.append("")
+    if screened:
+        lines.append(f"  {'コード':<6} {'銘柄名':<14} {'市場':<9} {'株価':>6} {'PER':>6} {'出来高':>12}  {'損切':>8}  {'利確':>8}")
+        lines.append("  " + "─" * 68)
+        for s in screened:
+            mkt = "グロース" if "東Ｇ" in s["market"] else "スタンダード"
+            lines.append(
+                f"  {s['code']:<6} {s['name']:<14} {mkt:<9}"
+                f" {s['price']:>6,.0f}円"
+                f" {s['per']:>5.1f}倍"
+                f" {s['volume']:>12,}"
+                f"  ▼{s['stop_loss']:>7,.1f}円"
+                f"  ▲{s['take_profit']:>7,.1f}円"
+            )
+    else:
+        lines.append("  本日の条件合致銘柄はありませんでした")
+    lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
+
     lines.append("─" * 52)
     lines.append("このメールは自動送信されています。")
     return "\n".join(lines)
@@ -595,10 +711,15 @@ def main():
         print("  EDINET_API_KEY 未設定のため決算進捗をスキップ")
         edinet_data = []
 
+    # 銘柄スクリーニング
+    print("  銘柄スクリーニング中 (出来高急増ランキング 最大8ページ)...")
+    screened = get_screened_stocks()
+    print(f"  スクリーニング結果: {len(screened)}件")
+
     # メール組み立て・送信
     today   = date.today().strftime("%Y/%m/%d")
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
-    body    = build_email_body(stock_data, wti, world_news, edinet_data)
+    body    = build_email_body(stock_data, wti, world_news, edinet_data, screened)
 
     print("メールを送信中...")
     send_email(subject, body)
