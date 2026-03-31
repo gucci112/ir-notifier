@@ -4,10 +4,11 @@ IR情報・WTI原油価格 自動通知スクリプト
 毎朝 GitHub Actions で自動実行 → Resend でメール送信
 """
 
+import io
 import os
+import csv
 import resend
 import requests
-import yfinance as yf
 from datetime import date
 from bs4 import BeautifulSoup
 
@@ -114,21 +115,31 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
 
 
 # ============================================================
-# 株価取得（yfinance）
+# stooq.com から CSV で価格取得（共通）
+# ============================================================
+def _fetch_stooq(symbol: str) -> list:
+    """stooq.com の日足CSVを取得し、行リストを返す（新しい順）"""
+    url = f"https://stooq.com/q/d/l/?s={symbol}&i=d"
+    res = requests.get(url, timeout=15)
+    res.raise_for_status()
+    reader = csv.DictReader(io.StringIO(res.text))
+    rows = [r for r in reader if r.get("Close") and r["Close"] != "null"]
+    return rows  # 古い順。末尾が最新
+
+
+# ============================================================
+# 株価取得（stooq.com）
 # ============================================================
 def get_stock_price(code: str) -> dict:
-    """yfinance で現在株価・前日比を取得する（東証: コード.T）"""
-    # キオクシア（285A）のような英数混在コードにも対応
-    ticker_symbol = f"{code}.T"
+    """stooq.com で現在株価・前日比を取得する（東証: コード.jp）"""
     try:
-        ticker = yf.Ticker(ticker_symbol)
-        hist = ticker.history(period="5d")   # 直近5営業日分を取得
-        if hist.empty:
+        rows = _fetch_stooq(f"{code}.jp")
+        if len(rows) < 1:
             print(f"    [警告] {code} の価格データが空です")
             return {"price": None}
 
-        price      = float(hist["Close"].iloc[-1])
-        prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else float(hist["Open"].iloc[-1])
+        price      = float(rows[-1]["Close"])
+        prev_close = float(rows[-2]["Close"]) if len(rows) >= 2 else price
         change     = price - prev_close
         change_pct = (change / prev_close) * 100
         return {
@@ -142,18 +153,17 @@ def get_stock_price(code: str) -> dict:
 
 
 # ============================================================
-# WTI 原油先物価格取得（yfinance）
+# WTI 原油先物価格取得（stooq.com）
 # ============================================================
 def get_wti_price() -> dict:
-    """WTI 原油先物（CL=F）の直近価格を取得する"""
+    """WTI 原油先物（CL.F）の直近価格を取得する"""
     try:
-        ticker = yf.Ticker("CL=F")
-        hist = ticker.history(period="5d")
-        if hist.empty:
+        rows = _fetch_stooq("cl.f")
+        if len(rows) < 1:
             return {"price": None, "error": "データが取得できませんでした"}
 
-        price      = float(hist["Close"].iloc[-1])
-        prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else float(hist["Open"].iloc[-1])
+        price      = float(rows[-1]["Close"])
+        prev_close = float(rows[-2]["Close"]) if len(rows) >= 2 else price
         change     = price - prev_close
         change_pct = (change / prev_close) * 100
         return {
