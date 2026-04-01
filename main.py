@@ -372,6 +372,29 @@ def _extract_col_value(table, col_keywords: list, exact: bool = False) -> float 
     return None
 
 
+def _parse_ratio_float(s: str) -> float | None:
+    """'18.9倍' や '－倍' などの比率文字列を float に変換する。－ は None を返す。"""
+    raw = s.replace("倍", "").replace(",", "").replace("－", "").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def _parse_mktcap_mn(s: str) -> float | None:
+    """時価総額文字列（例: '1,744億円', '11兆8,954億円'）を百万円単位の float に変換する。"""
+    s = s.replace(",", "").replace("円", "").strip()
+    mn = 0.0
+    if "兆" in s:
+        parts = s.split("兆")
+        mn += float(parts[0]) * 1_000_000  # 1兆円 = 1,000,000百万円
+        s = parts[1]
+    if "億" in s:
+        mn += float(s.replace("億", "")) * 100  # 1億円 = 100百万円
+        return mn
+    return None
+
+
 def _classify_cf_pattern(op_cf: float, inv_cf: float, fin_cf: float) -> str:
     """営業CF・投資CF・財務CFの符号からキャッシュフローパターンを分類する。"""
     op_pos  = op_cf  > 0
@@ -451,6 +474,7 @@ def get_financial_data(code: str) -> dict:
         op_cf = inv_cf = fin_cf = None
         actual_ni = forecast_ni = None
         sales_growth = None
+        per = pbr = mktcap_mn = cash = None
 
         for table in soup.find_all("table"):
             tr = table.find("tr")
@@ -459,8 +483,20 @@ def get_financial_data(code: str) -> dict:
             header_cells = [c.get_text(strip=True) for c in tr.find_all(["th", "td"])]
             header_text  = " ".join(header_cells)
 
+            # PER・PBR・時価総額テーブル（Table2: 行1=ラベル, 行2=値, 行3=時価総額）
+            if per is None and "PER" in header_cells and "PBR" in header_cells:
+                rows_t2 = table.find_all("tr")
+                if len(rows_t2) >= 2:
+                    val_cells = [c.get_text(strip=True) for c in rows_t2[1].find_all("td")]
+                    per = _parse_ratio_float(val_cells[0]) if len(val_cells) > 0 else None
+                    pbr = _parse_ratio_float(val_cells[1]) if len(val_cells) > 1 else None
+                if len(rows_t2) >= 3:
+                    mc_cells = [c.get_text(strip=True) for c in rows_t2[2].find_all(["th", "td"])]
+                    if len(mc_cells) >= 2:
+                        mktcap_mn = _parse_mktcap_mn(mc_cells[1])
+
             # 収益性テーブル（ROE・営業益・売上営業利益率）
-            if roe is None and ("ＲＯＥ" in header_text or "ROE" in header_text) and "総資産回転率" in header_text:
+            elif roe is None and ("ＲＯＥ" in header_text or "ROE" in header_text) and "総資産回転率" in header_text:
                 roe       = _extract_col_value(table, ["ＲＯＥ", "ROE"])
                 op_income = _extract_col_value(table, ["営業益"])
                 op_margin = _extract_col_value(table, ["売上営業利益率"])
@@ -471,11 +507,12 @@ def get_financial_data(code: str) -> dict:
                 equity       = _extract_col_value(table, ["自己資本"], exact=True)
                 debt_ratio   = _extract_col_value(table, ["有利子負債倍率"])
 
-            # CFテーブル（営業CF・投資CF・財務CF）
+            # CFテーブル（営業CF・投資CF・財務CF・現金等残高）
             elif op_cf is None and "営業CF" in header_text and "投資CF" in header_text:
-                op_cf  = _extract_col_value(table, ["営業CF"],  exact=True)
-                inv_cf = _extract_col_value(table, ["投資CF"],  exact=True)
-                fin_cf = _extract_col_value(table, ["財務CF"],  exact=True)
+                op_cf  = _extract_col_value(table, ["営業CF"],     exact=True)
+                inv_cf = _extract_col_value(table, ["投資CF"],     exact=True)
+                fin_cf = _extract_col_value(table, ["財務CF"],     exact=True)
+                cash   = _extract_col_value(table, ["現金等残高"], exact=True)
 
             # 通期決算テーブル（実績最終益・来期予想最終益・売上成長率）— 半期テーブルを除外
             elif actual_ni is None and "最終益" in header_cells and "修正1株配" in header_cells:
@@ -538,17 +575,34 @@ def get_financial_data(code: str) -> dict:
         if actual_ni is not None and forecast_ni is not None and actual_ni != 0:
             ni_forecast_yoy = round((forecast_ni - actual_ni) / abs(actual_ni) * 100, 1)
 
+        # PEG比率 = PER ÷ 売上成長率（成長率が正の場合のみ）
+        peg = None
+        if per is not None and sales_growth is not None and sales_growth > 0:
+            peg = round(per / sales_growth, 2)
+
+        # グレアムスコア = PER × PBR（22.5以下で割安）
+        graham = None
+        if per is not None and pbr is not None:
+            graham = round(per * pbr, 1)
+
+        # EV/EBITDA（EBITDAは営業利益で代替、kabutan.jpに減価償却費の個別開示なし）
+        ev_ebitda = None
+        if mktcap_mn is not None and op_income is not None and op_income > 0:
+            interest_debt = (equity or 0) * (debt_ratio or 0)
+            ev = mktcap_mn + interest_debt - (cash or 0)
+            ev_ebitda = round(ev / op_income, 1)
+
         # ヘルススコア（100点満点）
-        financials = {
+        financials_for_score = {
             "roe": roe, "roic": roic, "cf_pattern": cf_pattern,
             "sales_growth": sales_growth, "op_margin": op_margin,
         }
-        health_score = _calc_health_score(financials)
+        health_score = _calc_health_score(financials_for_score)
 
         print(
             f"    財務データ: ROE={roe} 自己資本比率={equity_ratio} ROIC={roic}% "
             f"営業利益率={op_margin}% 売上成長率={sales_growth}% CF={cf_pattern} "
-            f"来期益={ni_forecast_yoy}% スコア={health_score}"
+            f"来期益={ni_forecast_yoy}% PEG={peg} グレアム={graham} EV/EBITDA={ev_ebitda} スコア={health_score}"
         )
         return {
             "roe": roe, "equity_ratio": equity_ratio,
@@ -556,6 +610,8 @@ def get_financial_data(code: str) -> dict:
             "ni_forecast_yoy": ni_forecast_yoy,
             "op_margin": op_margin, "sales_growth": sales_growth,
             "health_score": health_score,
+            "per": per, "pbr": pbr,
+            "peg": peg, "graham": graham, "ev_ebitda": ev_ebitda,
         }
 
     except Exception as e:
@@ -564,6 +620,8 @@ def get_financial_data(code: str) -> dict:
             "roe": None, "equity_ratio": None,
             "roic": None, "cf_pattern": None, "ni_forecast_yoy": None,
             "op_margin": None, "sales_growth": None, "health_score": 0,
+            "per": None, "pbr": None,
+            "peg": None, "graham": None, "ev_ebitda": None,
         }
 
 
@@ -899,15 +957,30 @@ _COL_VOLUME = 8
 _COL_PER    = 9
 
 
-def _get_op_profit(code: str) -> float | None:
-    """kabutan.jp 業績ページから最新期（実績）の営業利益を取得（百万円単位）"""
+def _get_op_profit(code: str) -> dict:
+    """kabutan.jp 財務ページから営業利益・PBR・時価総額を取得する。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
+    result = {"op_profit": None, "pbr": None, "mktcap_mn": None}
     try:
         session = _get_kabutan_session()
         res = session.get(url, headers={"Referer": "https://kabutan.jp/"}, timeout=10)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
-        for table in soup.find_all("table"):
+        tables = soup.find_all("table")
+
+        # Table 2: PBR・時価総額
+        if len(tables) > 2:
+            t2_rows = tables[2].find_all("tr")
+            if len(t2_rows) >= 2:
+                val_cells = [c.get_text(strip=True) for c in t2_rows[1].find_all("td")]
+                result["pbr"] = _parse_ratio_float(val_cells[1]) if len(val_cells) > 1 else None
+            if len(t2_rows) >= 3:
+                mc_cells = [c.get_text(strip=True) for c in t2_rows[2].find_all(["th", "td"])]
+                if len(mc_cells) >= 2:
+                    result["mktcap_mn"] = _parse_mktcap_mn(mc_cells[1])
+
+        # 営業益（直近実績）
+        for table in tables:
             rows = table.find_all("tr")
             if not rows:
                 continue
@@ -915,24 +988,25 @@ def _get_op_profit(code: str) -> float | None:
             if "営業益" not in header:
                 continue
             op_col = header.index("営業益")
-            # 実績行を逆順に走査して最新の値を取得（予・前期比行を除外）
             for row in reversed(rows[1:]):
                 cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
                 if not cells or not cells[0]:
                     continue
-                period = cells[0]
-                if period.startswith("予") or "前期比" in period:
+                if cells[0].startswith("予") or "前期比" in cells[0]:
                     continue
                 if len(cells) > op_col:
                     val = cells[op_col].replace(",", "")
                     if val and val not in ("－", ""):
                         try:
-                            return float(val)
+                            result["op_profit"] = float(val)
+                            break
                         except ValueError:
                             pass
+            if result["op_profit"] is not None:
+                break
     except Exception as e:
         print(f"    [警告] {code} 営業利益取得失敗: {e}")
-    return None
+    return result
 
 
 def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
@@ -1002,9 +1076,11 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             except ValueError:
                 volume = 0
 
-            # 営業利益チェック（赤字企業の除外）
-            code = raw[_COL_CODE]
-            op_profit = _get_op_profit(code)
+            # 営業利益チェック（赤字企業の除外）+ PBR・時価総額取得
+            code     = raw[_COL_CODE]
+            fin_info = _get_op_profit(code)
+            op_profit  = fin_info["op_profit"]
+            pbr_screen = fin_info["pbr"]
             if op_profit is not None and op_profit <= 0:
                 print(f"    [{code}] {name} 営業利益マイナス({op_profit:,.0f}百万円) → 除外")
                 continue
@@ -1012,6 +1088,7 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             op_label = (
                 f"{op_profit:+,.0f}百万円" if op_profit is not None else "確認不可"
             )
+            graham_screen = round(per * pbr_screen, 1) if pbr_screen is not None else None
 
             results.append({
                 "code":        code,
@@ -1019,6 +1096,8 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
                 "market":      market,
                 "price":       price,
                 "per":         per,
+                "pbr":         pbr_screen,
+                "graham":      graham_screen,
                 "volume":      volume,
                 "op_profit":   op_label,
                 "stop_loss":   round(price * 0.92, 1),
@@ -1115,8 +1194,9 @@ def build_email_body(
     # --- バフェット指標スクリーニング サマリー ---
     lines.append(f"▼ バフェット指標スクリーニング（監視{len(stock_data)}銘柄）")
     lines.append(f"  条件: ROE {ROE_MIN:.0f}%以上 かつ 自己資本比率 {EQUITY_RATIO_MIN:.0f}%以上")
-    lines.append(f"  参考: ROIC 10%以上=✓ / 営業利益率 10%以上=✓ / CFパターン")
-    lines.append(f"        売上成長率 マイナス=⚠ / 来期純利益予想 -30%以下=⚠ / ヘルススコア /100")
+    lines.append(f"  参考: ROIC≥10%=✓ / 営業利益率≥10%=✓ / CFパターン")
+    lines.append(f"        売上成長率 マイナス=⚠ / 来期益 -30%以下=⚠ / ヘルススコア /100")
+    lines.append(f"        PEG≤1=割安✓ / グレアム(PER×PBR)≤22.5=割安✓ / EV/EBITDA≤10=割安✓")
     lines.append("")
 
     def _fmt_buffett_row(d: dict) -> list[str]:
@@ -1157,10 +1237,23 @@ def build_email_body(
         hs     = f.get("health_score", 0)
         hs_s   = f"{hs}/100"
 
+        peg_v  = f.get("peg")
+        peg_s  = (f"{peg_v:.2f}{'✓' if peg_v <= 1 else ''}"
+                  if peg_v is not None else "--")
+
+        gv     = f.get("graham")
+        gs_s   = (f"{gv:.1f}{'✓' if gv <= 22.5 else ''}"
+                  if gv is not None else "--")
+
+        ev_v   = f.get("ev_ebitda")
+        ev_s   = (f"{ev_v:.1f}倍{'✓' if ev_v <= 10 else ''}"
+                  if ev_v is not None else "--")
+
         return [
             f"    {name}（{code}）  【スコア: {hs_s}】",
             f"      ROE:{roe_s}  自己資本比率:{eq_s}  ROIC:{roic_s}  営業利益率:{om_s}",
             f"      売上成長率:{sg_s}  CFパターン:{cf_s}  来期純利益予想:{yoy_s}",
+            f"      PEG:{peg_s}  グレアム:{gs_s}  EV/EBITDA:{ev_s}",
         ]
 
     passed_items = [d for d in stock_data if d.get("buffett_passed")]
@@ -1282,8 +1375,15 @@ def build_email_body(
         for s in screened:
             mkt = "グロース" if "東Ｇ" in s["market"] else "スタンダード"
             lines.append("  ----")
+            gv       = s.get("graham")
+            pbr_s    = f"{s['pbr']:.2f}倍" if s.get("pbr") is not None else "--"
+            graham_s = (f"{gv:.1f}{'✓' if gv <= 22.5 else ''}"
+                        if gv is not None else "--")
             lines.append(f"  【{s['code']}】{s['name']}（{mkt}）")
-            lines.append(f"  株価：{s['price']:,.0f}円  PER：{s['per']:.1f}倍  出来高：{s['volume']:,}")
+            lines.append(
+                f"  株価：{s['price']:,.0f}円  PER：{s['per']:.1f}倍  PBR：{pbr_s}"
+                f"  グレアム：{graham_s}  出来高：{s['volume']:,}"
+            )
             lines.append(f"  営業利益（直近通期）：{s['op_profit']}")
             lines.append(f"  損切：▼{s['stop_loss']:,.1f}円 / 利確：▲{s['take_profit']:,.1f}円")
         lines.append("  ----")
