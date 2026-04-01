@@ -554,6 +554,77 @@ def get_wti_price() -> dict:
 
 
 # ============================================================
+# 日経平均 + 東証33業種トレンド
+# ============================================================
+_TSE33_NAMES = {
+    1: "水産・農林業",    2: "鉱業",            3: "建設業",
+    4: "食料品",          5: "繊維業",          6: "パルプ・紙",
+    7: "化学",            8: "医薬品",          9: "石油・石炭製品",
+   10: "ゴム製品",       11: "ガラス・土石製品", 12: "鉄鋼",
+   13: "非鉄金属",       14: "金属製品",        15: "機械",
+   16: "電気機器",       17: "輸送用機器",      18: "精密機器",
+   19: "その他製品",     20: "電力・ガス業",    21: "陸運業",
+   22: "海運業",         23: "空運業",          24: "倉庫・運輸関連業",
+   25: "情報・通信業",   26: "卸売業",          27: "小売業",
+   28: "銀行業",         29: "証券業",          30: "保険業",
+   31: "その他金融業",   32: "不動産業",        33: "サービス業",
+}
+
+
+def get_nikkei_data() -> dict:
+    """日経平均の現在値・前日比・騰落率を Yahoo Finance API から取得"""
+    try:
+        closes = _fetch_yahoo("%5EN225")
+        if not closes:
+            return {"price": None}
+        price      = closes[-1]
+        prev_close = closes[-2] if len(closes) >= 2 else price
+        change     = price - prev_close
+        change_pct = (change / prev_close) * 100
+        return {
+            "price":      round(price, 2),
+            "change":     round(change, 2),
+            "change_pct": round(change_pct, 2),
+        }
+    except Exception as e:
+        print(f"    [警告] 日経平均取得失敗: {e}")
+    return {"price": None}
+
+
+def get_sector_trends() -> list:
+    """kabutan.jp トップページの setIndustry() データから東証33業種の騰落率リストを返す
+
+    戻り値: [{"id": int, "name": str, "change_pct": float}, ...]  (騰落率降順)
+    """
+    try:
+        res = requests.get("https://kabutan.jp/", headers=HEADERS, timeout=15)
+        res.raise_for_status()
+        # setIndustry("datas=ID,PCT,#ID,PCT,#...", ...) を抽出
+        m = re.search(r'setIndustry\("datas=([^"]+)"', res.text)
+        if not m:
+            return []
+        raw = m.group(1)
+        # 末尾の "#" を除いて "ID,PCT" ペアに分割
+        pairs = [p for p in raw.split(",#") if "," in p]
+        sectors = []
+        for pair in pairs:
+            sid_str, pct_str = pair.rstrip(",#").split(",", 1)
+            try:
+                sid = int(sid_str)
+                pct = float(pct_str)
+            except ValueError:
+                continue
+            name = _TSE33_NAMES.get(sid, f"業種{sid}")
+            sectors.append({"id": sid, "name": name, "change_pct": pct})
+        # すでに降順ソート済みだが念のため
+        sectors.sort(key=lambda x: x["change_pct"], reverse=True)
+        return sectors
+    except Exception as e:
+        print(f"    [警告] 東証33業種取得失敗: {e}")
+    return []
+
+
+# ============================================================
 # 銘柄スクリーニング（kabutan.jp 出来高急増ランキング）
 # ============================================================
 _SCREEN_URL = "https://kabutan.jp/warning/?mode=2_1&market=0&page={page}"
@@ -712,6 +783,8 @@ def build_email_body(
     world_news: list,
     edinet_data: list,
     screened: list,
+    nikkei: dict | None = None,
+    sectors: list | None = None,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -719,6 +792,36 @@ def build_email_body(
         "=" * 52,
         "",
     ]
+
+    # --- 日経平均 ---
+    lines.append("▼ 日経平均")
+    if nikkei and nikkei.get("price"):
+        sign = "+" if nikkei["change"] >= 0 else ""
+        lines.append(
+            f"  {nikkei['price']:,.2f}円  "
+            f"（前日比 {sign}{nikkei['change']:+,.2f} ／ {sign}{nikkei['change_pct']:+.2f}%）"
+        )
+    else:
+        lines.append("  取得できませんでした")
+    lines.append("")
+
+    # --- 東証33業種トレンド ---
+    lines.append("▼ 東証33業種トレンド")
+    if sectors:
+        top3    = sectors[:3]
+        bottom3 = sectors[-3:][::-1]   # 下落上位3（変化率が小さい順→昇順）
+        lines.append("  【上昇上位3業種】")
+        for s in top3:
+            lines.append(f"    {s['name']:<12}  +{s['change_pct']:.2f}%")
+        lines.append("  【下落上位3業種】")
+        for s in bottom3:
+            sign = "+" if s["change_pct"] >= 0 else ""
+            lines.append(f"    {s['name']:<12}  {sign}{s['change_pct']:.2f}%")
+    else:
+        lines.append("  取得できませんでした")
+    lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
 
     # --- 世界情勢（Al Jazeera） ---
     lines.append("▼ 世界情勢（Al Jazeera）")
@@ -903,6 +1006,13 @@ def main():
             "price": price, "news": news,
         })
 
+    # 日経平均・東証33業種
+    print("  日経平均を取得中...")
+    nikkei = get_nikkei_data()
+    print("  東証33業種トレンドを取得中...")
+    sectors = get_sector_trends()
+    print(f"  東証33業種: {len(sectors)}業種取得")
+
     # WTI 価格取得
     print("  WTI 原油価格を取得中...")
     wti = get_wti_price()
@@ -926,7 +1036,8 @@ def main():
     # メール組み立て・送信
     today   = date.today().strftime("%Y/%m/%d")
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
-    body    = build_email_body(stock_data, wti, world_news, edinet_data, screened)
+    body    = build_email_body(stock_data, wti, world_news, edinet_data, screened,
+                               nikkei=nikkei, sectors=sectors)
 
     print("メールを送信中...")
     send_email(subject, body)
