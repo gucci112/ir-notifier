@@ -328,9 +328,10 @@ def get_aljazeera_news(max_items: int = 7) -> list:
 # ============================================================
 # バフェット指標取得（kabutan.jp /stock/finance）
 # ============================================================
-def _extract_col_value(table, col_keywords: list) -> float | None:
+def _extract_col_value(table, col_keywords: list, exact: bool = False) -> float | None:
     """テーブルのヘッダー行からキーワードが一致する列を探し、最新実績行の値を返す。
-    kabutan.jp は「ヘッダー行 → データ行」の縦持ち構造。全角/半角どちらにも対応。"""
+    kabutan.jp は「ヘッダー行 → データ行」の縦持ち構造。全角/半角どちらにも対応。
+    exact=True の場合は部分一致でなく完全一致で列を探す。"""
     rows = table.find_all("tr")
     if not rows:
         return None
@@ -341,7 +342,11 @@ def _extract_col_value(table, col_keywords: list) -> float | None:
     for i, h in enumerate(header_cells):
         # 全角→半角に正規化して比較
         h_norm = h.replace("Ｒ", "R").replace("Ｏ", "O").replace("Ｅ", "E")
-        if any(kw in h or kw in h_norm for kw in col_keywords):
+        if exact:
+            match = any(kw == h or kw == h_norm for kw in col_keywords)
+        else:
+            match = any(kw in h or kw in h_norm for kw in col_keywords)
+        if match:
             col_idx = i
             break
     if col_idx is None:
@@ -367,9 +372,30 @@ def _extract_col_value(table, col_keywords: list) -> float | None:
     return None
 
 
+def _classify_cf_pattern(op_cf: float, inv_cf: float, fin_cf: float) -> str:
+    """営業CF・投資CF・財務CFの符号からキャッシュフローパターンを分類する。"""
+    op_pos  = op_cf  > 0
+    inv_neg = inv_cf < 0
+    fin_pos = fin_cf > 0
+    if op_pos and inv_neg and fin_pos:
+        return "成長型"       # 本業好調＋積極投資＋外部調達
+    if op_pos and inv_neg and not fin_pos:
+        return "安定型"       # 本業好調＋適度な投資＋借入返済・株主還元
+    if op_pos and not inv_neg and not fin_pos:
+        return "収穫型"       # 本業好調＋資産回収＋借入返済・株主還元
+    if op_pos and not inv_neg and fin_pos:
+        return "キャッシュ蓄積型"  # 本業好調＋資産回収＋外部調達でキャッシュ積み上げ
+    if not op_pos and inv_cf > 0 and fin_pos:
+        return "再建型"       # 本業不振＋資産売却＋外部調達で再建中
+    if not op_pos and inv_cf > 0 and not fin_pos:
+        return "リストラ型"   # 本業不振＋資産売却で借入返済
+    if not op_pos and inv_neg:
+        return "危険型"       # 本業不振＋借入で投資継続
+    return "その他"
+
+
 def get_financial_data(code: str) -> dict:
-    """kabutan.jp の財務ページから ROE・自己資本比率を取得する。
-    ROEは収益性テーブル（ヘッダー: ＲＯＥ）、自己資本比率は財務テーブルから取得。"""
+    """kabutan.jp の財務ページから ROE・自己資本比率・ROIC・CFパターン・来期純利益予想を取得する。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
     try:
         session = _get_kabutan_session()
@@ -377,28 +403,94 @@ def get_financial_data(code: str) -> dict:
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
 
-        roe          = None
-        equity_ratio = None
+        roe = equity_ratio = None
+        op_income = equity = debt_ratio = None
+        op_cf = inv_cf = fin_cf = None
+        actual_ni = forecast_ni = None
 
         for table in soup.find_all("table"):
-            header_text = " ".join(
-                c.get_text(strip=True) for c in (table.find("tr") or []).find_all(["th", "td"])
-            ) if table.find("tr") else ""
+            tr = table.find("tr")
+            if not tr:
+                continue
+            header_cells = [c.get_text(strip=True) for c in tr.find_all(["th", "td"])]
+            header_text  = " ".join(header_cells)
 
-            # ROEテーブル: ヘッダーに「ＲＯＥ」または「ROE」がある
-            if roe is None and ("ＲＯＥ" in header_text or "ROE" in header_text):
-                roe = _extract_col_value(table, ["ＲＯＥ", "ROE"])
+            # 収益性テーブル（ROE・営業益）
+            if roe is None and ("ＲＯＥ" in header_text or "ROE" in header_text) and "総資産回転率" in header_text:
+                roe       = _extract_col_value(table, ["ＲＯＥ", "ROE"])
+                op_income = _extract_col_value(table, ["営業益"])
 
-            # 自己資本比率テーブル: ヘッダーに「自己資本比率」がある
-            if equity_ratio is None and "自己資本比率" in header_text:
+            # 財務テーブル（自己資本比率・自己資本・有利子負債倍率）
+            elif equity_ratio is None and "自己資本比率" in header_text and "有利子負債倍率" in header_text:
                 equity_ratio = _extract_col_value(table, ["自己資本比率"])
+                equity       = _extract_col_value(table, ["自己資本"], exact=True)
+                debt_ratio   = _extract_col_value(table, ["有利子負債倍率"])
 
-        print(f"    財務データ: ROE={roe} 自己資本比率={equity_ratio}")
-        return {"roe": roe, "equity_ratio": equity_ratio}
+            # CFテーブル（営業CF・投資CF・財務CF）
+            elif op_cf is None and "営業CF" in header_text and "投資CF" in header_text:
+                op_cf  = _extract_col_value(table, ["営業CF"],  exact=True)
+                inv_cf = _extract_col_value(table, ["投資CF"],  exact=True)
+                fin_cf = _extract_col_value(table, ["財務CF"],  exact=True)
+
+            # 通期決算テーブル（実績最終益・来期予想最終益）— 半期テーブルを除外
+            elif actual_ni is None and "最終益" in header_cells and "修正1株配" in header_cells:
+                ni_col = header_cells.index("最終益")
+                for row in reversed(table.find_all("tr")[1:]):
+                    cells = row.find_all(["th", "td"])
+                    if not cells or ni_col >= len(cells):
+                        continue
+                    first = cells[0].get_text(strip=True)
+                    if not first:
+                        continue
+                    # 年度形式（YYYY.MM）のみ対象。半期テーブル（YY.MM-MM）は除外
+                    period = first.lstrip("予連")
+                    if not re.match(r'^\d{4}\.\d{2}$', period):
+                        continue
+                    val_raw = (cells[ni_col].get_text(strip=True)
+                               .replace(",", "").replace("－", "").replace("―", "").strip())
+                    try:
+                        val = float(val_raw)
+                    except ValueError:
+                        continue
+                    if first.startswith("予"):
+                        if forecast_ni is None:
+                            forecast_ni = val
+                    else:
+                        if actual_ni is None:
+                            actual_ni = val
+
+        # ROIC = NOPAT(営業利益×0.7) / 投下資本(自己資本×(1+有利子負債倍率))
+        roic = None
+        if op_income is not None and equity is not None and equity > 0:
+            dr   = debt_ratio if debt_ratio is not None else 0.0
+            roic = round(op_income * 0.7 / (equity * (1 + dr)) * 100, 1)
+
+        # CFパターン判定
+        cf_pattern = None
+        if op_cf is not None and inv_cf is not None and fin_cf is not None:
+            cf_pattern = _classify_cf_pattern(op_cf, inv_cf, fin_cf)
+
+        # 来期純利益予想の前年比
+        ni_forecast_yoy = None
+        if actual_ni is not None and forecast_ni is not None and actual_ni != 0:
+            ni_forecast_yoy = round((forecast_ni - actual_ni) / abs(actual_ni) * 100, 1)
+
+        print(
+            f"    財務データ: ROE={roe} 自己資本比率={equity_ratio} "
+            f"ROIC={roic}% CF={cf_pattern} 来期純利益予想={ni_forecast_yoy}%"
+        )
+        return {
+            "roe": roe, "equity_ratio": equity_ratio,
+            "roic": roic, "cf_pattern": cf_pattern,
+            "ni_forecast_yoy": ni_forecast_yoy,
+        }
 
     except Exception as e:
         print(f"    [警告] {code} の財務データ取得失敗: {e}")
-        return {"roe": None, "equity_ratio": None}
+        return {
+            "roe": None, "equity_ratio": None,
+            "roic": None, "cf_pattern": None, "ni_forecast_yoy": None,
+        }
 
 
 def passes_buffett_screen(financials: dict) -> bool:
@@ -947,25 +1039,49 @@ def build_email_body(
     lines.append("")
 
     # --- バフェット指標スクリーニング サマリー ---
-    lines.append(f"▼ バフェット指標スクリーニング（監視6銘柄）")
+    lines.append(f"▼ バフェット指標スクリーニング（監視{len(stock_data)}銘柄）")
     lines.append(f"  条件: ROE {ROE_MIN:.0f}%以上 かつ 自己資本比率 {EQUITY_RATIO_MIN:.0f}%以上")
+    lines.append(f"  参考: ROIC 10%以上=✓ / CFパターン / 来期純利益予想（-30%以下=⚠）")
     lines.append("")
+
+    def _fmt_buffett_row(d: dict) -> list[str]:
+        """1銘柄分のバフェット指標行を返す"""
+        f    = d["buffett"]
+        name = d["stock"]["name"]
+        code = d["stock"]["code"]
+
+        roe_s  = f"{f['roe']}%"           if f["roe"]          is not None else "--"
+        eq_s   = f"{f['equity_ratio']}%"  if f["equity_ratio"] is not None else "--"
+        roic_v = f["roic"]
+        roic_s = f"{roic_v}%{'✓' if roic_v is not None and roic_v >= 10 else '✗'}" \
+                 if roic_v is not None else "--"
+        cf_s   = f["cf_pattern"] or "--"
+        yoy_v  = f["ni_forecast_yoy"]
+        if yoy_v is None:
+            yoy_s = "--"
+        elif yoy_v <= -30:
+            yoy_s = f"{yoy_v:+.1f}% ⚠大幅減益"
+        else:
+            yoy_s = f"{yoy_v:+.1f}%"
+
+        return [
+            f"    {name}（{code}）",
+            f"      ROE:{roe_s}  自己資本比率:{eq_s}  ROIC:{roic_s}",
+            f"      CFパターン:{cf_s}  来期純利益予想:{yoy_s}",
+        ]
+
     passed_items = [d for d in stock_data if d.get("buffett_passed")]
     failed_items = [d for d in stock_data if not d.get("buffett_passed")]
     if passed_items:
         lines.append("  ✔ 通過:")
         for d in passed_items:
-            f = d["buffett"]
-            roe_s = f"{f['roe']}%" if f["roe"] is not None else "取得不可"
-            eq_s  = f"{f['equity_ratio']}%" if f["equity_ratio"] is not None else "取得不可"
-            lines.append(f"    {d['stock']['name']}（{d['stock']['code']}）  ROE:{roe_s} / 自己資本比率:{eq_s}")
+            lines.extend(_fmt_buffett_row(d))
+            lines.append("")
     if failed_items:
         lines.append("  ✘ 不通過:")
         for d in failed_items:
-            f = d["buffett"]
-            roe_s = f"{f['roe']}%" if f["roe"] is not None else "取得不可"
-            eq_s  = f"{f['equity_ratio']}%" if f["equity_ratio"] is not None else "取得不可"
-            lines.append(f"    {d['stock']['name']}（{d['stock']['code']}）  ROE:{roe_s} / 自己資本比率:{eq_s}")
+            lines.extend(_fmt_buffett_row(d))
+            lines.append("")
     lines.append("")
     lines.append("=" * 52)
     lines.append("")
