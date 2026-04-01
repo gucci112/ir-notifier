@@ -504,6 +504,100 @@ def _fetch_yahoo(symbol: str) -> list:
     return [c for c in closes if c is not None]
 
 
+def _fetch_yahoo_full(symbol: str, range_: str = "60d") -> tuple[list, list]:
+    """Yahoo Finance から終値・出来高リストを返す (None除外済みペア)。"""
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        f"?interval=1d&range={range_}"
+    )
+    res = requests.get(url, headers=_YF_HEADERS, timeout=15)
+    res.raise_for_status()
+    data  = res.json()
+    quote = data["chart"]["result"][0]["indicators"]["quote"][0]
+    pairs = [
+        (c, v)
+        for c, v in zip(quote.get("close", []), quote.get("volume", []))
+        if c is not None and v is not None
+    ]
+    if not pairs:
+        return [], []
+    closes, volumes = zip(*pairs)
+    return list(closes), list(volumes)
+
+
+# ============================================================
+# テクニカル指標計算
+# ============================================================
+def _calc_rsi(closes: list, period: int = 14) -> float | None:
+    """Wilder平滑化法による RSI(14) 計算"""
+    if len(closes) < period + 1:
+        return None
+    deltas   = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains    = [d if d > 0 else 0.0 for d in deltas]
+    losses   = [-d if d < 0 else 0.0 for d in deltas]
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(deltas)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 1)
+
+
+def _calc_ma25_dev(closes: list) -> float | None:
+    """25日移動平均線からの乖離率（%）"""
+    if len(closes) < 25:
+        return None
+    ma25 = sum(closes[-25:]) / 25
+    return round((closes[-1] - ma25) / ma25 * 100, 1)
+
+
+def _calc_vol_surge(volumes: list) -> float | None:
+    """直近出来高の5日平均比（倍率）"""
+    if len(volumes) < 6:
+        return None
+    avg5 = sum(volumes[-6:-1]) / 5
+    if avg5 == 0:
+        return None
+    return round(volumes[-1] / avg5, 2)
+
+
+def get_technical_signals(code: str) -> dict:
+    """Yahoo Finance から RSI・25MA乖離率・出来高急増を計算してシグナルを返す。"""
+    try:
+        closes, volumes = _fetch_yahoo_full(f"{code}.T", range_="60d")
+        rsi       = _calc_rsi(closes)
+        ma25_dev  = _calc_ma25_dev(closes)
+        vol_surge = _calc_vol_surge(volumes)
+
+        signals = []
+        if rsi is not None:
+            if rsi <= 30:
+                signals.append(f"[買] RSI売られ過ぎ({rsi:.1f})")
+            elif rsi >= 70:
+                signals.append(f"[売] RSI買われ過ぎ({rsi:.1f})")
+        if ma25_dev is not None:
+            if ma25_dev <= -5.0:
+                signals.append(f"[買検討] 25MA下方乖離({ma25_dev:+.1f}%)")
+            elif ma25_dev >= 10.0:
+                signals.append(f"[利確検討] 25MA上方乖離({ma25_dev:+.1f}%)")
+        if vol_surge is not None and vol_surge >= 2.0:
+            signals.append(f"[注目] 出来高急増({vol_surge:.1f}倍)")
+
+        print(f"    テクニカル: RSI={rsi} MA25乖離={ma25_dev}% 出来高比={vol_surge}倍")
+        return {
+            "rsi":       rsi,
+            "ma25_dev":  ma25_dev,
+            "vol_surge": vol_surge,
+            "signals":   signals,
+        }
+    except Exception as e:
+        print(f"    [警告] {code} テクニカル取得失敗: {e}")
+        return {"rsi": None, "ma25_dev": None, "vol_surge": None, "signals": []}
+
+
 # ============================================================
 # 株価取得（Yahoo Finance API）
 # ============================================================
@@ -876,6 +970,27 @@ def build_email_body(
     lines.append("=" * 52)
     lines.append("")
 
+    # --- テクニカルシグナル ---
+    lines.append("▼ テクニカルシグナル（監視銘柄）")
+    lines.append("  RSI(14): ≤30=買 ≥70=売 / 25MA乖離: ≤-5%=買検討 ≥+10%=利確検討 / 出来高: 5日平均≥2倍=注目")
+    lines.append("")
+    for item in stock_data:
+        sig       = item.get("signals", {})
+        rsi       = sig.get("rsi")
+        ma25_dev  = sig.get("ma25_dev")
+        vol_surge = sig.get("vol_surge")
+        rsi_s     = f"RSI:{rsi:.1f}"            if rsi       is not None else "RSI:--"
+        ma_s      = f"25MA乖離:{ma25_dev:+.1f}%" if ma25_dev  is not None else "25MA乖離:--"
+        vol_s     = f"出来高比:{vol_surge:.1f}倍" if vol_surge is not None else "出来高比:--"
+        tags      = sig.get("signals", [])
+        sig_str   = " / ".join(tags) if tags else "シグナルなし"
+        lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）")
+        lines.append(f"    {rsi_s}  |  {ma_s}  |  {vol_s}")
+        lines.append(f"    → {sig_str}")
+        lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
+
     # --- 各銘柄（通過銘柄のみ詳細表示） ---
     for item in stock_data:
         stock  = item["stock"]
@@ -898,6 +1013,11 @@ def build_email_body(
 
         lines.append(f"▼ {stock['name']}（{stock['code']}） ✔")
         lines.append(price_str)
+
+        sig      = item.get("signals", {})
+        tags     = sig.get("signals", [])
+        if tags:
+            lines.append("  【シグナル】 " + " / ".join(tags))
         lines.append("")
 
         # ニュース・IR
@@ -999,11 +1119,12 @@ def main():
         passed     = passes_buffett_screen(buffett)
         price      = get_stock_price(stock["code"])
         news       = get_stock_news(stock["code"]) if passed else []
+        signals    = get_technical_signals(stock["code"])
         print(f"    バフェット: {'✔ 通過' if passed else '✘ 不通過'} "
               f"ROE={buffett['roe']} 自己資本比率={buffett['equity_ratio']}")
         stock_data.append({
             "stock": stock, "buffett": buffett, "buffett_passed": passed,
-            "price": price, "news": news,
+            "price": price, "news": news, "signals": signals,
         })
 
     # 日経平均・東証33業種
