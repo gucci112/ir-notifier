@@ -39,11 +39,38 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Referer": "https://kabutan.jp/",
-    "Accept-Language": "ja,en-US;q=0.9",
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,image/apng,*/*;q=0.8"
+    ),
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Upgrade-Insecure-Requests": "1",
 }
+
+_kabutan_session: requests.Session | None = None
+
+
+def _get_kabutan_session() -> requests.Session:
+    """kabutan.jp 用セッションを返す。初回呼び出し時にホームページを訪問してCookieを取得する。"""
+    global _kabutan_session
+    if _kabutan_session is not None:
+        return _kabutan_session
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    try:
+        session.get("https://kabutan.jp/", timeout=15)
+    except Exception:
+        pass
+    _kabutan_session = session
+    return session
 
 # ============================================================
 # バフェット指標スクリーニング 閾値
@@ -345,7 +372,8 @@ def get_financial_data(code: str) -> dict:
     ROEは収益性テーブル（ヘッダー: ＲＯＥ）、自己資本比率は財務テーブルから取得。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=15)
+        session = _get_kabutan_session()
+        res = session.get(url, headers={"Referer": "https://kabutan.jp/"}, timeout=15)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
 
@@ -393,7 +421,8 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
     for path in [f"/stock/news?code={code}"]:
         url = f"https://kabutan.jp{path}"
         try:
-            res = requests.get(url, headers=HEADERS, timeout=15)
+            session = _get_kabutan_session()
+            res = session.get(url, headers={"Referer": "https://kabutan.jp/"}, timeout=15)
             res.raise_for_status()
             soup = BeautifulSoup(res.text, "html.parser")
 
@@ -543,7 +572,8 @@ def _get_op_profit(code: str) -> float | None:
     """kabutan.jp 業績ページから最新期（実績）の営業利益を取得（百万円単位）"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
     try:
-        res = requests.get(url, headers=HEADERS, timeout=10)
+        session = _get_kabutan_session()
+        res = session.get(url, headers={"Referer": "https://kabutan.jp/"}, timeout=10)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         for table in soup.find_all("table"):
