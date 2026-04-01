@@ -394,6 +394,49 @@ def _classify_cf_pattern(op_cf: float, inv_cf: float, fin_cf: float) -> str:
     return "その他"
 
 
+def _calc_health_score(f: dict) -> int:
+    """ROE・ROIC・CFパターン・売上成長率・営業利益率から100点満点のヘルススコアを算出する。"""
+    score = 0
+
+    # ROE（25点）
+    roe = f.get("roe")
+    if roe is not None:
+        if roe >= 20:   score += 25
+        elif roe >= 15: score += 20
+        elif roe >= 10: score += 15
+        elif roe >= 5:  score += 8
+
+    # ROIC（25点）
+    roic = f.get("roic")
+    if roic is not None:
+        if roic >= 15:   score += 25
+        elif roic >= 10: score += 20
+        elif roic >= 5:  score += 10
+
+    # CFパターン（20点）
+    cf_scores = {
+        "安定型": 20, "成長型": 15, "収穫型": 15,
+        "キャッシュ蓄積型": 10, "再建型": 5, "リストラ型": 5, "危険型": 0,
+    }
+    score += cf_scores.get(f.get("cf_pattern") or "", 0)
+
+    # 売上成長率（20点）
+    sg = f.get("sales_growth")
+    if sg is not None:
+        if sg >= 10:  score += 20
+        elif sg >= 5: score += 15
+        elif sg >= 0: score += 8
+
+    # 営業利益率（10点）
+    om = f.get("op_margin")
+    if om is not None:
+        if om >= 20:   score += 10
+        elif om >= 10: score += 8
+        elif om >= 5:  score += 4
+
+    return score
+
+
 def get_financial_data(code: str) -> dict:
     """kabutan.jp の財務ページから ROE・自己資本比率・ROIC・CFパターン・来期純利益予想を取得する。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
@@ -403,10 +446,11 @@ def get_financial_data(code: str) -> dict:
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
 
-        roe = equity_ratio = None
+        roe = equity_ratio = op_margin = None
         op_income = equity = debt_ratio = None
         op_cf = inv_cf = fin_cf = None
         actual_ni = forecast_ni = None
+        sales_growth = None
 
         for table in soup.find_all("table"):
             tr = table.find("tr")
@@ -415,10 +459,11 @@ def get_financial_data(code: str) -> dict:
             header_cells = [c.get_text(strip=True) for c in tr.find_all(["th", "td"])]
             header_text  = " ".join(header_cells)
 
-            # 収益性テーブル（ROE・営業益）
+            # 収益性テーブル（ROE・営業益・売上営業利益率）
             if roe is None and ("ＲＯＥ" in header_text or "ROE" in header_text) and "総資産回転率" in header_text:
                 roe       = _extract_col_value(table, ["ＲＯＥ", "ROE"])
                 op_income = _extract_col_value(table, ["営業益"])
+                op_margin = _extract_col_value(table, ["売上営業利益率"])
 
             # 財務テーブル（自己資本比率・自己資本・有利子負債倍率）
             elif equity_ratio is None and "自己資本比率" in header_text and "有利子負債倍率" in header_text:
@@ -432,9 +477,13 @@ def get_financial_data(code: str) -> dict:
                 inv_cf = _extract_col_value(table, ["投資CF"],  exact=True)
                 fin_cf = _extract_col_value(table, ["財務CF"],  exact=True)
 
-            # 通期決算テーブル（実績最終益・来期予想最終益）— 半期テーブルを除外
+            # 通期決算テーブル（実績最終益・来期予想最終益・売上成長率）— 半期テーブルを除外
             elif actual_ni is None and "最終益" in header_cells and "修正1株配" in header_cells:
-                ni_col = header_cells.index("最終益")
+                ni_col    = header_cells.index("最終益")
+                sales_col = header_cells.index("売上高") if "売上高" in header_cells else None
+
+                # reversed で最新順に走査し、実績最終益・来期予想・売上高2期分を取得
+                sales_actual: list[float] = []
                 for row in reversed(table.find_all("tr")[1:]):
                     cells = row.find_all(["th", "td"])
                     if not cells or ni_col >= len(cells):
@@ -451,13 +500,27 @@ def get_financial_data(code: str) -> dict:
                     try:
                         val = float(val_raw)
                     except ValueError:
-                        continue
+                        val = None
                     if first.startswith("予"):
-                        if forecast_ni is None:
+                        if forecast_ni is None and val is not None:
                             forecast_ni = val
                     else:
-                        if actual_ni is None:
+                        if actual_ni is None and val is not None:
                             actual_ni = val
+                        # 売上高を最大2期分収集（最新→前期の順）
+                        if sales_col is not None and len(sales_actual) < 2:
+                            s_raw = (cells[sales_col].get_text(strip=True)
+                                     .replace(",", "").strip())
+                            try:
+                                sales_actual.append(float(s_raw))
+                            except ValueError:
+                                pass
+
+                # 売上成長率 = (当期 - 前期) / 前期 × 100
+                if len(sales_actual) >= 2 and sales_actual[1] != 0:
+                    sales_growth = round(
+                        (sales_actual[0] - sales_actual[1]) / sales_actual[1] * 100, 1
+                    )
 
         # ROIC = NOPAT(営業利益×0.7) / 投下資本(自己資本×(1+有利子負債倍率))
         roic = None
@@ -475,14 +538,24 @@ def get_financial_data(code: str) -> dict:
         if actual_ni is not None and forecast_ni is not None and actual_ni != 0:
             ni_forecast_yoy = round((forecast_ni - actual_ni) / abs(actual_ni) * 100, 1)
 
+        # ヘルススコア（100点満点）
+        financials = {
+            "roe": roe, "roic": roic, "cf_pattern": cf_pattern,
+            "sales_growth": sales_growth, "op_margin": op_margin,
+        }
+        health_score = _calc_health_score(financials)
+
         print(
-            f"    財務データ: ROE={roe} 自己資本比率={equity_ratio} "
-            f"ROIC={roic}% CF={cf_pattern} 来期純利益予想={ni_forecast_yoy}%"
+            f"    財務データ: ROE={roe} 自己資本比率={equity_ratio} ROIC={roic}% "
+            f"営業利益率={op_margin}% 売上成長率={sales_growth}% CF={cf_pattern} "
+            f"来期益={ni_forecast_yoy}% スコア={health_score}"
         )
         return {
             "roe": roe, "equity_ratio": equity_ratio,
             "roic": roic, "cf_pattern": cf_pattern,
             "ni_forecast_yoy": ni_forecast_yoy,
+            "op_margin": op_margin, "sales_growth": sales_growth,
+            "health_score": health_score,
         }
 
     except Exception as e:
@@ -490,6 +563,7 @@ def get_financial_data(code: str) -> dict:
         return {
             "roe": None, "equity_ratio": None,
             "roic": None, "cf_pattern": None, "ni_forecast_yoy": None,
+            "op_margin": None, "sales_growth": None, "health_score": 0,
         }
 
 
@@ -1041,7 +1115,8 @@ def build_email_body(
     # --- バフェット指標スクリーニング サマリー ---
     lines.append(f"▼ バフェット指標スクリーニング（監視{len(stock_data)}銘柄）")
     lines.append(f"  条件: ROE {ROE_MIN:.0f}%以上 かつ 自己資本比率 {EQUITY_RATIO_MIN:.0f}%以上")
-    lines.append(f"  参考: ROIC 10%以上=✓ / CFパターン / 来期純利益予想（-30%以下=⚠）")
+    lines.append(f"  参考: ROIC 10%以上=✓ / 営業利益率 10%以上=✓ / CFパターン")
+    lines.append(f"        売上成長率 マイナス=⚠ / 来期純利益予想 -30%以下=⚠ / ヘルススコア /100")
     lines.append("")
 
     def _fmt_buffett_row(d: dict) -> list[str]:
@@ -1052,11 +1127,26 @@ def build_email_body(
 
         roe_s  = f"{f['roe']}%"           if f["roe"]          is not None else "--"
         eq_s   = f"{f['equity_ratio']}%"  if f["equity_ratio"] is not None else "--"
-        roic_v = f["roic"]
-        roic_s = f"{roic_v}%{'✓' if roic_v is not None and roic_v >= 10 else '✗'}" \
-                 if roic_v is not None else "--"
-        cf_s   = f["cf_pattern"] or "--"
-        yoy_v  = f["ni_forecast_yoy"]
+
+        roic_v = f.get("roic")
+        roic_s = (f"{roic_v}%{'✓' if roic_v >= 10 else '✗'}"
+                  if roic_v is not None else "--")
+
+        om_v   = f.get("op_margin")
+        om_s   = (f"{om_v}%{'✓' if om_v >= 10 else '✗'}"
+                  if om_v is not None else "--")
+
+        sg_v   = f.get("sales_growth")
+        if sg_v is None:
+            sg_s = "--"
+        elif sg_v < 0:
+            sg_s = f"{sg_v:+.1f}% ⚠"
+        else:
+            sg_s = f"{sg_v:+.1f}%✓"
+
+        cf_s   = f.get("cf_pattern") or "--"
+
+        yoy_v  = f.get("ni_forecast_yoy")
         if yoy_v is None:
             yoy_s = "--"
         elif yoy_v <= -30:
@@ -1064,10 +1154,13 @@ def build_email_body(
         else:
             yoy_s = f"{yoy_v:+.1f}%"
 
+        hs     = f.get("health_score", 0)
+        hs_s   = f"{hs}/100"
+
         return [
-            f"    {name}（{code}）",
-            f"      ROE:{roe_s}  自己資本比率:{eq_s}  ROIC:{roic_s}",
-            f"      CFパターン:{cf_s}  来期純利益予想:{yoy_s}",
+            f"    {name}（{code}）  【スコア: {hs_s}】",
+            f"      ROE:{roe_s}  自己資本比率:{eq_s}  ROIC:{roic_s}  営業利益率:{om_s}",
+            f"      売上成長率:{sg_s}  CFパターン:{cf_s}  来期純利益予想:{yoy_s}",
         ]
 
     passed_items = [d for d in stock_data if d.get("buffett_passed")]
