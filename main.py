@@ -8,6 +8,7 @@ import os
 import re
 import io
 import json
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 import resend
@@ -294,9 +295,13 @@ _WORLD_KEYWORDS = [
 
 def get_aljazeera_news(max_items: int = 7) -> list:
     """アルジャジーラRSSから経済・エネルギー・地政学ニュースをスコアリングして返す"""
-    url = "https://www.aljazeera.com/xml/rss/all.xml"
+    url = f"https://www.aljazeera.com/xml/rss/all.xml?_={int(time.time())}"
     try:
-        res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        res = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }, timeout=15)
         res.raise_for_status()
         root = ET.fromstring(res.content)
 
@@ -915,7 +920,7 @@ def get_sector_trends() -> list:
     戻り値: [{"id": int, "name": str, "change_pct": float}, ...]  (騰落率降順)
     """
     try:
-        res = requests.get("https://kabutan.jp/", headers=HEADERS, timeout=15)
+        res = requests.get(f"https://kabutan.jp/?_={int(time.time())}", headers=HEADERS, timeout=15)
         res.raise_for_status()
         # setIndustry("datas=ID,PCT,#ID,PCT,#...", ...) を抽出
         m = re.search(r'setIndustry\("datas=([^"]+)"', res.text)
