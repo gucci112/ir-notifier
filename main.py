@@ -1342,14 +1342,56 @@ def build_email_body(
     lines.append("=" * 52)
     lines.append("")
 
-    # --- WTI 原油価格 ---
+    # --- WTI 原油価格 + シナリオ判定 ---
     lines.append("▼ WTI 原油先物価格（ドル/バレル）")
     if wti.get("price"):
         sign = "+" if wti["change"] >= 0 else ""
+        wti_price = wti["price"]
         lines.append(
-            f"  ${wti['price']:,.2f}  "
+            f"  ${wti_price:,.2f}  "
             f"（前日比 {sign}{wti['change']:+.2f} ／ {sign}{wti['change_pct']:+.2f}%）"
         )
+        lines.append("")
+
+        # シナリオ判定
+        if wti_price < 90:
+            scenario = "A"
+            scenario_label = "🟢 シナリオA：停戦・封鎖解除（最良）"
+            scenario_desc = [
+                "  【状況】WTI $90以下 → 地政学リスク後退",
+                "  【アクション】確認翌営業日から順次エントリー開始",
+                "  【優先順】",
+                "    1位 日本電技（1723）目標 9,000円",
+                "    2位 新日本空調（1952）目標 3,400円",
+                "    3位 ローツェ（6323）目標 2,600円",
+            ]
+        elif wti_price <= 100:
+            scenario = "B"
+            scenario_label = "🟡 シナリオB：膠着継続（現状維持）"
+            scenario_desc = [
+                "  【状況】WTI $90〜$100 → 情勢変わらず",
+                "  【アクション】新規エントリー凍結継続",
+                "  【例外的エントリー候補】",
+                "    ・楽待（6037）910円逆指値維持のまま保有継続",
+                f"    ・JM（6055）WTI $95以下({'✅ 条件クリア' if wti_price <= 95 else '❌ 未達'})＋株価1,750円以上で買い増し検討",
+            ]
+        else:
+            scenario = "C"
+            scenario_label = "🔴 シナリオC：完全ロックダウン（最悪）"
+            scenario_desc = [
+                "  【状況】WTI $120超 → イラン停戦拒否継続",
+                "  【アクション】全ポジション見直し・新規エントリー全面停止",
+                "  【必須対応】",
+                "    → JM・楽待ともに損切りライン厳守",
+                "  【逆張り注目銘柄（保有不要・観察のみ）】",
+                "    ・新日本空調 → 原発緊急稼働で急騰可能性",
+                "    ・東京計器 → 防衛需要爆発",
+            ]
+
+        lines.append(f"  ■ 現在のシナリオ判定：{scenario_label}")
+        lines.append(f"  （A: <$90 エントリー可 ／ B: $90〜$100 凍結 ／ C: >$100 撤退）")
+        lines.append("")
+        lines.extend(scenario_desc)
     else:
         lines.append(f"  {wti.get('error', '取得失敗')}")
     lines.append("")
