@@ -135,7 +135,10 @@ def _edinet_doc_list(date_str: str) -> list:
 
 
 def _find_quarterly_docs(codes4: list) -> dict:
-    """各4桁証券コードの最新四半期報告書（docTypeCode=120）を最大90日遡って検索"""
+    """各4桁証券コードの最新四半期/半期報告書を最大90日遡って検索。
+    2024年4月から四半期報告書(120)が廃止され半期報告書(130)に統合されたため両方を対象とする。
+    """
+    TARGET_CODES = {"120", "130"}
     found, today = {}, date.today()
     for delta in range(90):
         if len(found) == len(codes4):
@@ -143,7 +146,9 @@ def _find_quarterly_docs(codes4: list) -> dict:
         d = (today - timedelta(days=delta)).strftime("%Y-%m-%d")
         for doc in _edinet_doc_list(d):
             sec = (doc.get("secCode") or "")[:4]
-            if sec in codes4 and sec not in found and doc.get("docTypeCode") == "120":
+            if sec not in codes4 or sec in found:
+                continue
+            if doc.get("docTypeCode") in TARGET_CODES:
                 found[sec] = doc
     return found
 
