@@ -134,9 +134,24 @@ def _edinet_doc_list(date_str: str) -> list:
         return []
 
 
+def _match_sec_code(raw: str, codes4: list) -> str | None:
+    """EDINETのsecCode（5桁・スペース含む等）を4桁コードにマッチングする。
+    例: '60550' → '6055' / '6055 ' → '6055' / '6055' → '6055'
+    """
+    raw = (raw or "").strip()
+    # 先頭4桁が一致するか確認
+    if len(raw) >= 4 and raw[:4] in codes4:
+        return raw[:4]
+    # 末尾が '0' の5桁コード（例: '60550'）→ 先頭4桁
+    if len(raw) == 5 and raw[4] == "0" and raw[:4] in codes4:
+        return raw[:4]
+    return None
+
+
 def _find_quarterly_docs(codes4: list) -> dict:
     """各4桁証券コードの最新四半期/半期報告書を最大90日遡って検索。
     2024年4月から四半期報告書(120)が廃止され半期報告書(130)に統合されたため両方を対象とする。
+    secCodeは5桁・スペース・末尾0など表記ゆれがあるため柔軟にマッチングする。
     """
     TARGET_CODES = {"120", "130"}
     found, today = {}, date.today()
@@ -145,10 +160,13 @@ def _find_quarterly_docs(codes4: list) -> dict:
             break
         d = (today - timedelta(days=delta)).strftime("%Y-%m-%d")
         for doc in _edinet_doc_list(d):
-            sec = (doc.get("secCode") or "")[:4]
-            if sec not in codes4 or sec in found:
+            raw_sec = doc.get("secCode") or ""
+            sec = _match_sec_code(raw_sec, codes4)
+            if sec is None or sec in found:
                 continue
             if doc.get("docTypeCode") in TARGET_CODES:
+                print(f"    [EDINET] {sec} 書類発見: docID={doc.get('docID')} "
+                      f"type={doc.get('docTypeCode')} date={d} secCode={raw_sec}")
                 found[sec] = doc
     return found
 
