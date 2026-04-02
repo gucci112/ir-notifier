@@ -1724,16 +1724,30 @@ def build_email_body(
 
     # --- 決算進捗（EDINET 四半期報告書）---
     if edinet_data:
-        lines.append("▼ 決算進捗（EDINET 四半期報告書）")
-        for entry in edinet_data:
-            stock = entry["stock"]
-            doc   = entry.get("doc") or {}
-            fin   = entry.get("financials") or {}
-            q     = fin.get("quarter") or "?"
-            period = (doc.get("periodEnd") or "")[:7]
-            lines.append(f"  {stock['name']}（{stock['code']}）  {q} 期末:{period}")
-            if entry.get("error"):
-                lines.append(f"    ※ {entry['error']}")
+        # 実際にデータが取れたエントリーがあるか確認
+        has_data = any(not e.get("error") or "見つかりませんでした" not in (e.get("error") or "") for e in edinet_data)
+        all_not_found = all("見つかりませんでした" in (e.get("error") or "") for e in edinet_data)
+
+        lines.append("▼ 決算進捗（EDINET 半期報告書）")
+        if all_not_found:
+            lines.append("  ※ 現在提出済みの報告書はありません")
+            lines.append("  ※ 3月決算銘柄の次回提出予定：11月頃（第2四半期）")
+            lines.append("")
+            lines.append("=" * 52)
+            lines.append("")
+        else:
+            for entry in edinet_data:
+                stock = entry["stock"]
+                doc   = entry.get("doc") or {}
+                fin   = entry.get("financials") or {}
+                q     = fin.get("quarter") or "?"
+                period = (doc.get("periodEnd") or "")[:7]
+                lines.append(f"  {stock['name']}（{stock['code']}）  {q} 期末:{period}")
+                if entry.get("error"):
+                    if "見つかりませんでした" in entry["error"]:
+                        lines.append(f"    ※ 報告書未提出（次回：11月頃）")
+                    else:
+                        lines.append(f"    ※ {entry['error']}")
             else:
                 for label, ak, fk in [
                     ("売上高",   "sales",      "sales_fc"),
