@@ -1279,6 +1279,127 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
 
 
 # ============================================================
+# StockRadar 統合スコア計算
+# ============================================================
+def calc_integrated_score(
+    stock_item: dict,
+    wti: dict,
+    world_news: list,
+    edinet_entry: dict | None = None,
+) -> dict:
+    """各銘柄の統合スコアを100点満点で算出する。
+
+    配点:
+      テクニカル   30点  (7指標の買いシグナル数)
+      財務         25点  (ROE・自己資本比率・ROIC・ヘルススコア)
+      モメンタム   20点  (決算進捗・OI成長=営業利益成長)
+      WTIシナリオ  15点  (A=15 / B=8 / C=0)
+      世界情勢     10点  (地政学リスク低=高得点)
+    """
+    score = 0
+    breakdown = {}
+
+    # ── テクニカル（30点）──
+    sig = stock_item.get("signals", {})
+    buy_count  = sig.get("buy_count", 0)
+    sell_count = sig.get("sell_count", 0)
+    tech_score = max(0, min(30, buy_count * 6 - sell_count * 4))
+    score += tech_score
+    breakdown["テクニカル"] = (tech_score, 30,
+        f"買{buy_count}指標 売{sell_count}指標")
+
+    # ── 財務（25点）──
+    fin = stock_item.get("buffett", {})
+    hs  = fin.get("health_score", 0)          # 0〜100
+    fin_score = round(hs / 100 * 25)
+    score += fin_score
+    roe = fin.get("roe")
+    eq  = fin.get("equity_ratio")
+    breakdown["財務"] = (fin_score, 25,
+        f"ヘルススコア{hs}/100  ROE:{roe}%  自己資本:{eq}%")
+
+    # ── モメンタム（20点）──
+    mom_score = 0
+    mom_notes = []
+    # 決算進捗（EDINETデータから）
+    if edinet_entry:
+        fin_e = edinet_entry.get("financials") or {}
+        q     = fin_e.get("quarter") or ""
+        op    = fin_e.get("op_income")
+        op_fc = fin_e.get("op_fc")
+        if op and op_fc and op_fc > 0:
+            prog = op / op_fc * 100
+            pace = {"Q1": 25, "Q2": 50, "Q3": 75}.get(q, 100)
+            if prog >= pace + 5:
+                mom_score += 12
+                mom_notes.append(f"進捗{prog:.0f}%✓")
+            elif prog >= pace - 5:
+                mom_score += 7
+                mom_notes.append(f"進捗{prog:.0f}%")
+            else:
+                mom_notes.append(f"進捗{prog:.0f}%⚠")
+    # 売上成長（財務データから）
+    sg = fin.get("sales_growth")
+    if sg is not None:
+        if sg >= 10:
+            mom_score += 8
+            mom_notes.append(f"売上+{sg:.1f}%✓")
+        elif sg >= 0:
+            mom_score += 4
+            mom_notes.append(f"売上+{sg:.1f}%")
+        else:
+            mom_notes.append(f"売上{sg:.1f}%⚠")
+    mom_score = min(20, mom_score)
+    score += mom_score
+    breakdown["モメンタム"] = (mom_score, 20,
+        " ".join(mom_notes) if mom_notes else "データなし")
+
+    # ── WTIシナリオ（15点）──
+    wti_price = wti.get("price") or 0
+    if wti_price < 90:
+        wti_score, wti_label = 15, "シナリオA（エントリー可）"
+    elif wti_price <= 100:
+        wti_score, wti_label = 8,  "シナリオB（凍結中）"
+    else:
+        wti_score, wti_label = 0,  "シナリオC（撤退検討）"
+    score += wti_score
+    breakdown["WTIシナリオ"] = (wti_score, 15,
+        f"${wti_price:.1f}  {wti_label}")
+
+    # ── 世界情勢（10点）──
+    # アルジャジーラスコアの平均が低い=地政学リスク低=高得点
+    if world_news:
+        avg_risk = sum(n.get("score", 0) for n in world_news) / len(world_news)
+        # スコア1〜3=低リスク→10点、4〜6=中→6点、7+=高リスク→2点
+        if avg_risk <= 3:
+            geo_score, geo_label = 10, "地政学リスク低"
+        elif avg_risk <= 6:
+            geo_score, geo_label = 6,  "地政学リスク中"
+        else:
+            geo_score, geo_label = 2,  "地政学リスク高"
+    else:
+        geo_score, geo_label = 5, "情報なし"
+    score += geo_score
+    breakdown["世界情勢"] = (geo_score, 10, geo_label)
+
+    # ── 総合判定 ──
+    if score >= 70:
+        rating = "★★★ 強い買いシグナル"
+    elif score >= 50:
+        rating = "★★  買い候補"
+    elif score >= 30:
+        rating = "★   様子見"
+    else:
+        rating = "    見送り"
+
+    return {
+        "score":     score,
+        "rating":    rating,
+        "breakdown": breakdown,
+    }
+
+
+# ============================================================
 # メール本文の組み立て
 # ============================================================
 def build_email_body(
@@ -1296,6 +1417,32 @@ def build_email_body(
         "=" * 52,
         "",
     ]
+
+    # --- StockRadar 統合スコア サマリー ---
+    lines.append("▼ StockRadar 統合スコア（監視銘柄）")
+    lines.append("  ★★★≥70点=強買 / ★★≥50=買候補 / ★≥30=様子見 / <30=見送り")
+    lines.append("  配点: テクニカル30 + 財務25 + モメンタム20 + WTI15 + 世界情勢10")
+    lines.append("")
+    for item in stock_data:
+        # EDINETデータから対応エントリーを探す
+        code4 = item["stock"]["code"][:4]
+        edinet_entry = next(
+            (e for e in edinet_data if e["stock"]["code"][:4] == code4), None
+        ) if edinet_data else None
+        integrated = calc_integrated_score(item, wti, world_news, edinet_entry)
+        score = integrated["score"]
+        rating = integrated["rating"]
+        bd = integrated["breakdown"]
+        price = item.get("price", {})
+        price_str = f"¥{price['price']:,.0f}" if price.get("price") else "--"
+        lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）")
+        lines.append(f"    {rating}  [{score}/100点]  現在値:{price_str}")
+        for cat, (s, mx, note) in bd.items():
+            bar = "■" * s + "□" * (mx - s) if mx <= 30 else ""
+            lines.append(f"    {cat:<10} {s:>2}/{mx}点  {note}")
+        lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
 
     # --- 日経平均 ---
     lines.append("▼ 日経平均")
