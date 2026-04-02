@@ -1793,10 +1793,101 @@ def build_email_body(
 # ============================================================
 # Resend 送信
 # ============================================================
+def _build_html(body: str) -> str:
+    """テキスト本文をスマホ対応HTMLに変換する。"""
+    def esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    html_lines = []
+    for line in body.split("\n"):
+        raw = line.rstrip()
+        e   = esc(raw)
+
+        # 区切り線
+        if set(raw.strip()) <= {"=", "─", "-"} and len(raw.strip()) >= 10:
+            html_lines.append('<hr style="border:none;border-top:1px solid #444;margin:12px 0;">')
+            continue
+
+        # セクションヘッダー（▼ で始まる行）
+        if raw.startswith("▼"):
+            html_lines.append(
+                f'<div style="font-size:15px;font-weight:bold;color:#4fc3f7;'
+                f'margin:16px 0 6px;">{e}</div>'
+            )
+            continue
+
+        # 総合判定行（★ で始まる）
+        if "★★★" in raw:
+            html_lines.append(
+                f'<div style="font-size:14px;color:#ff5252;font-weight:bold;'
+                f'padding:2px 0;">{e}</div>'
+            )
+            continue
+        if "★★" in raw and "★★★" not in raw:
+            html_lines.append(
+                f'<div style="font-size:14px;color:#ffab40;font-weight:bold;'
+                f'padding:2px 0;">{e}</div>'
+            )
+            continue
+        if raw.strip().startswith("★") and "★★" not in raw:
+            html_lines.append(
+                f'<div style="font-size:13px;color:#aaa;padding:2px 0;">{e}</div>'
+            )
+            continue
+
+        # シナリオ判定
+        if "シナリオA" in raw and "🟢" in raw:
+            html_lines.append(
+                f'<div style="font-size:14px;color:#66bb6a;font-weight:bold;'
+                f'padding:4px 0;">{e}</div>'
+            )
+            continue
+        if "シナリオB" in raw and "🟡" in raw:
+            html_lines.append(
+                f'<div style="font-size:14px;color:#ffd54f;font-weight:bold;'
+                f'padding:4px 0;">{e}</div>'
+            )
+            continue
+        if "シナリオC" in raw and "🔴" in raw:
+            html_lines.append(
+                f'<div style="font-size:14px;color:#ef5350;font-weight:bold;'
+                f'padding:4px 0;">{e}</div>'
+            )
+            continue
+
+        # 銘柄名行（✔ or ✘ or 【 を含む見出し的な行）
+        if ("✔" in raw or "✘" in raw) and ("（" in raw):
+            color = "#66bb6a" if "✔" in raw else "#ef5350"
+            html_lines.append(
+                f'<div style="font-size:14px;font-weight:bold;color:{color};'
+                f'margin-top:10px;">{e}</div>'
+            )
+            continue
+
+        # 空行
+        if not raw.strip():
+            html_lines.append('<div style="height:6px;"></div>')
+            continue
+
+        # 通常行
+        html_lines.append(
+            f'<div style="font-size:13px;color:#ddd;line-height:1.7;'
+            f'word-break:break-all;">{e}</div>'
+        )
+
+    return """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="background:#1a1a1a;color:#ddd;font-family:-apple-system,sans-serif;
+  padding:12px 16px;max-width:600px;margin:0 auto;">
+""" + "\n".join(html_lines) + "\n</body></html>"
+
+
 def send_email(subject: str, body: str) -> None:
-    html_body = "<html><head><meta charset='UTF-8'></head><body><pre>" \
-                + body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") \
-                + "</pre></body></html>"
+    html_body = _build_html(body)
     resend.Emails.send({
         "from":    "onboarding@resend.dev",
         "to":      EMAIL_TO,
