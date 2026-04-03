@@ -1434,8 +1434,27 @@ def calc_integrated_score(
     score += geo_score
     breakdown["世界情勢"] = (geo_score, 10, geo_label)
 
+    # ── 流動性リスク（減点方式）──
+    liquidity = sig.get("liquidity") or {}
+    liq_judge = liquidity.get("judge", "unknown")
+    liq_label = liquidity.get("label", "--")
+    if liq_judge == "low":
+        liq_penalty = -10
+        liq_note = f"❌流動性不足 {liq_label}（-10点）"
+    elif liq_judge == "warn":
+        liq_penalty = -5
+        liq_note = f"⚠️流動性やや低 {liq_label}（-5点）"
+    else:
+        liq_penalty = 0
+        liq_note = f"流動性OK {liq_label}"
+    score += liq_penalty
+    score = max(0, score)  # 0点以下にならないよう調整
+    breakdown["流動性"] = (liq_penalty, 0, liq_note)
+
     # ── 総合判定 ──
-    if score >= 70:
+    if liq_judge == "low" and score < 50:
+        rating = "⚠️  流動性不足（売買困難リスク）"
+    elif score >= 70:
         rating = "★★★ 強い買いシグナル"
     elif score >= 50:
         rating = "★★  買い候補"
@@ -1490,8 +1509,11 @@ def build_email_body(
         lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）")
         lines.append(f"    {rating}  [{score}/100点]  現在値:{price_str}")
         for cat, (s, mx, note) in bd.items():
-            bar = "■" * s + "□" * (mx - s) if mx <= 30 else ""
-            lines.append(f"    {cat:<10} {s:>2}/{mx}点  {note}")
+            if cat == "流動性":
+                # 流動性は減点方式なので特別表示
+                lines.append(f"    {cat:<10} {s:>+2}点    {note}")
+            else:
+                lines.append(f"    {cat:<10} {s:>2}/{mx}点  {note}")
         lines.append("")
     lines.append("=" * 52)
     lines.append("")
