@@ -1811,22 +1811,82 @@ def build_email_body(
 
     # --- 銘柄スクリーニング ---
     lines.append("▼ 銘柄スクリーニング（出来高急増 × PER≤15 × 株価≤1000 × 東Ｇ/東Ｓ）")
-    lines.append("  ※ 損切ライン = 取得想定価格 -8%  /  利確ライン = +25%")
+    lines.append("  ※ StockRadar簡易判定付き / 損切-8% / 利確+25%")
+    lines.append("  流動性: ≥1億円/日=OK / <1億=⚠️")
     lines.append("")
     if screened:
         for s in screened:
             mkt = "グロース" if "東Ｇ" in s["market"] else "スタンダード"
-            lines.append("  ----")
             gv       = s.get("graham")
             pbr_s    = f"{s['pbr']:.2f}倍" if s.get("pbr") is not None else "--"
             graham_s = (f"{gv:.1f}{'✓' if gv <= 22.5 else ''}"
                         if gv is not None else "--")
-            lines.append(f"  【{s['code']}】{s['name']}（{mkt}）")
+
+            # --- StockRadar 簡易判定 ---
+            radar_pass = []
+            radar_fail = []
+
+            # PER判定
+            per = s.get("per")
+            if per is not None:
+                if per <= 10:
+                    radar_pass.append(f"PER{per:.1f}倍✓")
+                elif per <= 15:
+                    radar_pass.append(f"PER{per:.1f}倍")
+                else:
+                    radar_fail.append(f"PER{per:.1f}倍✗")
+
+            # グレアムスコア判定
+            if gv is not None:
+                if gv <= 22.5:
+                    radar_pass.append(f"グレアム{gv:.1f}✓")
+                else:
+                    radar_fail.append(f"グレアム{gv:.1f}✗")
+
+            # 営業利益判定（プラス確認済みだがラベル表示）
+            op = s.get("op_profit", "")
+            if "+" in str(op):
+                radar_pass.append("営業利益✓")
+
+            # 流動性判定（出来高×株価）
+            vol = s.get("volume", 0)
+            price = s.get("price", 0)
+            daily_yen = vol * price
+            if daily_yen >= 1_0000_0000:
+                liq_s = f"{daily_yen/1e8:.1f}億円/日✓"
+            elif daily_yen >= 3000_0000:
+                liq_s = f"⚠️{daily_yen/1e4:.0f}万円/日"
+                radar_fail.append("流動性⚠️")
+            else:
+                liq_s = f"❌{daily_yen/1e4:.0f}万円/日"
+                radar_fail.append("流動性❌")
+
+            # 総合判定
+            fail_n = len(radar_fail)
+            pass_n = len(radar_pass)
+            if fail_n == 0 and pass_n >= 3:
+                radar_verdict = "◎有望"
+            elif fail_n == 0:
+                radar_verdict = "○候補"
+            elif "流動性❌" in radar_fail:
+                radar_verdict = "❌流動性不足"
+            elif fail_n >= 2:
+                radar_verdict = "✗除外"
+            else:
+                radar_verdict = "△要検討"
+
+            lines.append("  ----")
+            lines.append(f"  【{s['code']}】{s['name']}（{mkt}）  {radar_verdict}")
             lines.append(
                 f"  株価：{s['price']:,.0f}円  PER：{s['per']:.1f}倍  PBR：{pbr_s}"
-                f"  グレアム：{graham_s}  出来高：{s['volume']:,}"
+                f"  グレアム：{graham_s}"
             )
+            lines.append(f"  流動性：{liq_s}  出来高：{s['volume']:,}")
             lines.append(f"  営業利益（直近通期）：{s['op_profit']}")
+            if radar_pass:
+                lines.append(f"  ✓ {' / '.join(radar_pass)}")
+            if radar_fail:
+                lines.append(f"  ✗ {' / '.join(radar_fail)}")
             lines.append(f"  損切：▼{s['stop_loss']:,.1f}円 / 利確：▲{s['take_profit']:,.1f}円")
         lines.append("  ----")
     else:
