@@ -899,9 +899,29 @@ def _calc_golden_dead_cross(closes: list) -> dict:
     }
 
 
+def _calc_liquidity(closes: list, volumes: list) -> dict:
+    """直近5日の日次売買代金（株価×出来高）から流動性リスクを判定する。
+    基準: 1億円以上=OK / 3000万〜1億円=⚠️ / 3000万円未満=❌流動性不足
+    """
+    if len(closes) < 5 or len(volumes) < 5:
+        return {"avg_volume_yen": None, "judge": "unknown", "label": "データ不足"}
+    # 直近5日の売買代金（円）= 終値 × 出来高
+    daily_values = [c * v for c, v in zip(closes[-5:], volumes[-5:]) if c and v]
+    if not daily_values:
+        return {"avg_volume_yen": None, "judge": "unknown", "label": "データ不足"}
+    avg = sum(daily_values) / len(daily_values)
+    if avg >= 1_0000_0000:        # 1億円以上
+        judge, label = "ok", f"{avg/1e8:.1f}億円/日"
+    elif avg >= 3000_0000:        # 3000万円以上
+        judge, label = "warn", f"⚠️{avg/1e4:.0f}万円/日（流動性やや低）"
+    else:                          # 3000万円未満
+        judge, label = "low", f"❌{avg/1e4:.0f}万円/日（流動性不足）"
+    return {"avg_volume_yen": round(avg), "judge": judge, "label": label}
+
+
 def get_technical_signals(code: str) -> dict:
-    """Yahoo Finance から7指標を計算してシグナルを返す。
-    指標: RSI / 25MA乖離 / 出来高急増 / MACD / ボリンジャーバンド / ゴールデン・デッドクロス / 出来高+株価上昇
+    """Yahoo Finance から7指標+流動性を計算してシグナルを返す。
+    指標: RSI / 25MA乖離 / 出来高急増 / MACD / ボリンジャーバンド / ゴールデン・デッドクロス / 出来高+株価上昇 / 流動性
     """
     try:
         closes, volumes = _fetch_yahoo_full(f"{code}.T", range_="90d")
@@ -911,6 +931,7 @@ def get_technical_signals(code: str) -> dict:
         macd      = _calc_macd(closes)
         boll      = _calc_bollinger(closes)
         cross     = _calc_golden_dead_cross(closes)
+        liquidity = _calc_liquidity(closes, volumes)
 
         signals = []
         buy_count = 0
@@ -973,8 +994,17 @@ def get_technical_signals(code: str) -> dict:
                 signals.append("[売] デッドクロス(5MA<25MA)")
                 sell_count += 1
 
-        # 総合判定
-        if buy_count >= 3:
+        # ⑧ 流動性チェック（売買代金）
+        liq_judge = liquidity.get("judge", "unknown")
+        if liq_judge == "low":
+            signals.append(f"[⚠️流動性不足] {liquidity['label']}")
+        elif liq_judge == "warn":
+            signals.append(f"[流動性注意] {liquidity['label']}")
+
+        # 総合判定（流動性不足は強制的に警告付き）
+        if liq_judge == "low":
+            summary = f"⚠️流動性不足（売買困難リスク）"
+        elif buy_count >= 3:
             summary = f"★強買シグナル({buy_count}指標一致)"
         elif buy_count >= 2:
             summary = f"◎買いシグナル({buy_count}指標一致)"
@@ -988,7 +1018,8 @@ def get_technical_signals(code: str) -> dict:
             summary = "様子見"
 
         print(f"    テクニカル: RSI={rsi} MA25乖離={ma25_dev}% 出来高比={vol_surge}倍 "
-              f"MACD={macd.get('hist')} BB%-B={boll.get('pct_b')} クロス={cross.get('above')} → {summary}")
+              f"MACD={macd.get('hist')} BB%-B={boll.get('pct_b')} クロス={cross.get('above')} "
+              f"流動性={liquidity.get('label')} → {summary}")
         return {
             "rsi":       rsi,
             "ma25_dev":  ma25_dev,
@@ -996,6 +1027,7 @@ def get_technical_signals(code: str) -> dict:
             "macd":      macd,
             "bollinger": boll,
             "cross":     cross,
+            "liquidity": liquidity,
             "signals":   signals,
             "summary":   summary,
             "buy_count": buy_count,
@@ -1006,6 +1038,7 @@ def get_technical_signals(code: str) -> dict:
         return {
             "rsi": None, "ma25_dev": None, "vol_surge": None,
             "macd": {}, "bollinger": {}, "cross": {},
+            "liquidity": {"avg_volume_yen": None, "judge": "unknown", "label": "取得失敗"},
             "signals": [], "summary": "取得失敗", "buy_count": 0, "sell_count": 0,
         }
 
@@ -1650,9 +1683,10 @@ def build_email_body(
     lines.append("")
 
     # --- テクニカルシグナル ---
-    lines.append("▼ テクニカルシグナル（監視銘柄）【7指標】")
+    lines.append("▼ テクニカルシグナル（監視銘柄）【7指標＋流動性】")
     lines.append("  ★強買=3指標以上一致 ◎買い=2指標 ○買い候補=1指標")
     lines.append("  ▼売り=2指標以上 △売り候補=1指標")
+    lines.append("  流動性: ≥1億円/日=OK / 3000万〜1億=⚠️ / <3000万=❌")
     lines.append("")
     for item in stock_data:
         sig       = item.get("signals", {})
@@ -1662,6 +1696,7 @@ def build_email_body(
         macd      = sig.get("macd") or {}
         boll      = sig.get("bollinger") or {}
         cross     = sig.get("cross") or {}
+        liquidity = sig.get("liquidity") or {}
         summary   = sig.get("summary", "様子見")
         tags      = sig.get("signals", [])
 
@@ -1673,13 +1708,14 @@ def build_email_body(
         pct_b  = boll.get("pct_b")
         bb_s   = f"BB%-B:{pct_b:.0f}%"        if pct_b     is not None else "BB:--"
         ma5    = cross.get("ma5")
-        ma25c  = cross.get("ma25")
-        cr_s   = (f"5MA{'>' if cross.get('above') else '<'}25MA")  if ma5 is not None else "クロス:--"
+        cr_s   = (f"5MA{'>' if cross.get('above') else '<'}25MA") if ma5 is not None else "クロス:--"
+        liq_s  = liquidity.get("label", "--")
 
         sig_str = "\n    ".join(tags) if tags else "シグナルなし"
         lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）  → {summary}")
         lines.append(f"    {rsi_s}  {ma_s}  {vol_s}")
         lines.append(f"    {macd_s}  {bb_s}  {cr_s}")
+        lines.append(f"    流動性: {liq_s}")
         lines.append(f"    {sig_str}")
         lines.append("")
     lines.append("=" * 52)
