@@ -1509,10 +1509,25 @@ def build_email_body(
     lines.append("")
 
     # --- 東証33業種トレンド ---
+    # 監視銘柄の業種マッピング
+    _STOCK_SECTOR = {
+        "6055": "サービス業",      # JM（半導体インフラ）
+        "4890": "サービス業",      # 坪田ラボ
+        "1951": "建設業",          # エクシオグループ
+        "1980": "建設業",          # ダイダン
+        "285A": "電気機器",        # キオクシア
+        "6845": "電気機器",        # アズビル
+    }
+
     lines.append("▼ 東証33業種トレンド")
     if sectors:
         top3    = sectors[:3]
-        bottom3 = sectors[-3:][::-1]   # 下落上位3（変化率が小さい順→昇順）
+        bottom3 = sectors[-3:][::-1]
+
+        # 上昇・下落業種名のセット
+        rising_names  = {s["name"] for s in top3}
+        falling_names = {s["name"] for s in bottom3}
+
         lines.append("  【上昇上位3業種】")
         for s in top3:
             lines.append(f"    {s['name']:<12}  +{s['change_pct']:.2f}%")
@@ -1520,6 +1535,38 @@ def build_email_body(
         for s in bottom3:
             sign = "+" if s["change_pct"] >= 0 else ""
             lines.append(f"    {s['name']:<12}  {sign}{s['change_pct']:.2f}%")
+
+        # 監視銘柄との関連コメント
+        tailwind, headwind = [], []
+        for stock in stock_data:
+            code = stock["stock"]["code"]
+            name = stock["stock"]["name"]
+            sector = _STOCK_SECTOR.get(code)
+            if sector in rising_names:
+                tailwind.append(f"{name}({code})")
+            elif sector in falling_names:
+                headwind.append(f"{name}({code})")
+
+        lines.append("")
+        if tailwind:
+            lines.append(f"  ✅ 追い風（上昇業種に属する）: {' / '.join(tailwind)}")
+        if headwind:
+            lines.append(f"  ⚠️ 向かい風（下落業種に属する）: {' / '.join(headwind)}")
+        if not tailwind and not headwind:
+            lines.append("  → 監視銘柄の業種は上位変動なし")
+
+        # 全体トレンドコメント
+        top_pct = sectors[0]["change_pct"] if sectors else 0
+        bot_pct = sectors[-1]["change_pct"] if sectors else 0
+        if top_pct >= 3.0 and bot_pct <= -2.0:
+            trend_comment = "業種間の格差大→テーマ性強い相場（上昇業種に集中）"
+        elif top_pct >= 2.0:
+            trend_comment = "特定業種主導の上昇相場"
+        elif bot_pct <= -2.0:
+            trend_comment = "特定業種の売り圧力あり→全体は慎重"
+        else:
+            trend_comment = "業種間の格差小→全体感のある相場"
+        lines.append(f"  📊 トレンド: {trend_comment}")
     else:
         lines.append("  取得できませんでした")
     lines.append("")
