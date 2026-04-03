@@ -994,12 +994,8 @@ def get_technical_signals(code: str) -> dict:
                 signals.append("[売] デッドクロス(5MA<25MA)")
                 sell_count += 1
 
-        # ⑧ 流動性チェック（売買代金）
+        # ⑧ 流動性チェック（売買代金）※メール表示側で別途表示するためsignalsには追加しない
         liq_judge = liquidity.get("judge", "unknown")
-        if liq_judge == "low":
-            signals.append(f"[⚠️流動性不足] {liquidity['label']}")
-        elif liq_judge == "warn":
-            signals.append(f"[流動性注意] {liquidity['label']}")
 
         # 総合判定（流動性不足は強制的に警告付き）
         if liq_judge == "low":
