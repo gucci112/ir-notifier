@@ -1470,6 +1470,95 @@ def calc_integrated_score(
     }
 
 
+def calc_selection_score(stock_item: dict) -> dict:
+    """① 銘柄選定スコア（財務・流動性のみ・50点満点）
+    WTI・テクニカル・地政学は含まない純粋なファンダメンタルズ評価。
+    配点:
+      財務ヘルス  25点  (ヘルススコア)
+      ROE        10点  (15%以上=10 / 10%以上=6 / それ以下=2)
+      流動性      10点  (OK=10 / warn=5 / low=0)
+      バフェット   5点  (通過=5 / 不通過=0)
+    """
+    fin = stock_item.get("buffett", {})
+    sig = stock_item.get("signals", {})
+
+    # 財務ヘルス（25点）
+    hs = fin.get("health_score", 0)
+    fin_score = round(hs / 100 * 25)
+
+    # ROE（10点）
+    roe = fin.get("roe") or 0
+    if roe >= 15:   roe_score = 10
+    elif roe >= 10: roe_score = 6
+    else:           roe_score = 2
+
+    # 流動性（10点）
+    liq = sig.get("liquidity") or {}
+    liq_judge = liq.get("judge", "unknown")
+    if liq_judge == "ok":     liq_score = 10
+    elif liq_judge == "warn": liq_score = 5
+    else:                     liq_score = 0
+
+    # バフェット通過（5点）
+    buf_score = 5 if stock_item.get("buffett_passed") else 0
+
+    total = fin_score + roe_score + liq_score + buf_score
+
+    if total >= 40:   grade = "S"
+    elif total >= 30: grade = "A"
+    elif total >= 20: grade = "B"
+    else:             grade = "C"
+
+    return {
+        "score": total,
+        "grade": grade,
+        "fin_score": fin_score,
+        "roe_score": roe_score,
+        "liq_score": liq_score,
+        "buf_score": buf_score,
+    }
+
+
+def calc_entry_signal(stock_item: dict, wti: dict) -> dict:
+    """② 売買計画スコア（テクニカル+WTIシナリオ・50点満点）
+    配点:
+      テクニカル  30点  (買いシグナル数)
+      WTIシナリオ 20点  (A=20 / B=10 / C=0)
+    """
+    sig = stock_item.get("signals", {})
+    buy_count  = sig.get("buy_count", 0)
+    sell_count = sig.get("sell_count", 0)
+    tech_score = max(0, min(30, buy_count * 6 - sell_count * 4))
+
+    wti_price = wti.get("price") or 0
+    if wti_price < 90:    wti_score, wti_label = 20, "シナリオA✅"
+    elif wti_price <= 100: wti_score, wti_label = 10, "シナリオB🟡"
+    else:                  wti_score, wti_label = 0,  "シナリオC🔴"
+
+    total = tech_score + wti_score
+    summary = sig.get("summary", "様子見")
+
+    if wti_score == 0:
+        entry_judge = "🔴 エントリー停止"
+    elif total >= 35:
+        entry_judge = "🟢 エントリー推奨"
+    elif total >= 20:
+        entry_judge = "🟡 条件付きエントリー検討"
+    else:
+        entry_judge = "⚪ 様子見"
+
+    return {
+        "score":       total,
+        "tech_score":  tech_score,
+        "wti_score":   wti_score,
+        "wti_label":   wti_label,
+        "entry_judge": entry_judge,
+        "summary":     summary,
+        "buy_count":   buy_count,
+        "sell_count":  sell_count,
+    }
+
+
 # ============================================================
 # メール本文の組み立て
 # ============================================================
@@ -1484,197 +1573,144 @@ def build_email_body(
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
-        f"■ IR・株価・WTI通知 ／ {today}",
+        f"■ IR通知（短期投資向け） ／ {today}",
         "=" * 52,
         "",
     ]
 
-    # --- StockRadar 統合スコア サマリー ---
-    lines.append("▼ StockRadar 統合スコア（監視銘柄）")
-    lines.append("  ★★★≥70点=強買 / ★★≥50=買候補 / ★≥30=様子見 / <30=見送り")
-    lines.append("  配点: テクニカル30 + 財務25 + モメンタム20 + WTI15 + 世界情勢10")
-    lines.append("")
-    for item in stock_data:
-        # EDINETデータから対応エントリーを探す
-        code4 = item["stock"]["code"][:4]
-        edinet_entry = next(
-            (e for e in edinet_data if e["stock"]["code"][:4] == code4), None
-        ) if edinet_data else None
-        integrated = calc_integrated_score(item, wti, world_news, edinet_entry)
-        score = integrated["score"]
-        rating = integrated["rating"]
-        bd = integrated["breakdown"]
-        price = item.get("price", {})
-        price_str = f"¥{price['price']:,.0f}" if price.get("price") else "--"
-        lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）")
-        lines.append(f"    {rating}  [{score}/100点]  現在値:{price_str}")
-        for cat, (s, mx, note) in bd.items():
-            if cat == "流動性":
-                # 流動性は減点方式なので特別表示
-                lines.append(f"    {cat:<10} {s:>+2}点    {note}")
-            else:
-                lines.append(f"    {cat:<10} {s:>2}/{mx}点  {note}")
-        lines.append("")
-    lines.append("=" * 52)
+    # ============================================================
+    # ■ マクロ環境
+    # ============================================================
+    lines.append("▼ マクロ環境")
     lines.append("")
 
-    # --- 日経平均 ---
-    lines.append("▼ 日経平均")
+    # WTIシナリオ
+    wti_price = wti.get("price") or 0
+    if wti_price < 90:
+        wti_scenario = "🟢 シナリオA：エントリー可"
+        wti_action   = "確認翌営業日から順次エントリー開始"
+    elif wti_price <= 100:
+        wti_scenario = "🟡 シナリオB：凍結中"
+        wti_action   = "新規エントリー凍結・Compression形成待ち"
+    else:
+        wti_scenario = "🔴 シナリオC：エントリー停止"
+        wti_action   = f"WTI $100以下でB復帰 / $90以下でA移行"
+
+    if wti.get("price"):
+        sign = "+" if wti["change"] >= 0 else ""
+        lines.append(f"  WTI: ${wti_price:.2f}  （{sign}{wti['change']:+.2f} ／ {sign}{wti['change_pct']:+.2f}%）")
+    lines.append(f"  {wti_scenario}")
+    lines.append(f"  → {wti_action}")
+    lines.append("")
+
+    # 日経平均
     if nikkei and nikkei.get("price"):
         sign = "+" if nikkei["change"] >= 0 else ""
-        lines.append(
-            f"  {nikkei['price']:,.2f}円  "
-            f"（前日比 {sign}{nikkei['change']:+,.2f} ／ {sign}{nikkei['change_pct']:+.2f}%）"
-        )
-    else:
-        lines.append("  取得できませんでした")
-    lines.append("")
+        lines.append(f"  日経平均: {nikkei['price']:,.0f}円  （{sign}{nikkei['change']:+,.0f} ／ {sign}{nikkei['change_pct']:+.2f}%）")
 
-    # --- 東証33業種トレンド ---
-    # 監視銘柄の業種マッピング
+    # セクタートレンド
     _STOCK_SECTOR = {
-        "6055": "サービス業",      # JM（半導体インフラ）
-        "4890": "サービス業",      # 坪田ラボ
-        "1951": "建設業",          # エクシオグループ
-        "1980": "建設業",          # ダイダン
-        "285A": "電気機器",        # キオクシア
-        "6845": "電気機器",        # アズビル
+        "6055": "サービス業", "4890": "サービス業",
+        "1951": "建設業",    "1980": "建設業",
+        "285A": "電気機器",  "6845": "電気機器",
     }
-
-    lines.append("▼ 東証33業種トレンド")
     if sectors:
         top3    = sectors[:3]
         bottom3 = sectors[-3:][::-1]
-
-        # 上昇・下落業種名のセット
-        rising_names  = {s["name"] for s in top3}
-        falling_names = {s["name"] for s in bottom3}
-
-        lines.append("  【上昇上位3業種】")
-        for s in top3:
-            lines.append(f"    {s['name']:<12}  +{s['change_pct']:.2f}%")
-        lines.append("  【下落上位3業種】")
-        for s in bottom3:
-            sign = "+" if s["change_pct"] >= 0 else ""
-            lines.append(f"    {s['name']:<12}  {sign}{s['change_pct']:.2f}%")
-
-        # 監視銘柄との関連コメント
-        tailwind, headwind = [], []
-        for stock in stock_data:
-            code = stock["stock"]["code"]
-            name = stock["stock"]["name"]
-            sector = _STOCK_SECTOR.get(code)
-            if sector in rising_names:
-                tailwind.append(f"{name}({code})")
-            elif sector in falling_names:
-                headwind.append(f"{name}({code})")
-
-        lines.append("")
+        top_str    = " / ".join(f"{s['name']}+{s['change_pct']:.1f}%" for s in top3)
+        bottom_str = " / ".join(f"{s['name']}{s['change_pct']:+.1f}%" for s in bottom3)
+        lines.append(f"  上昇業種: {top_str}")
+        lines.append(f"  下落業種: {bottom_str}")
+        rising_names = {s["name"] for s in top3}
+        tailwind = [item["stock"]["name"] for item in stock_data
+                    if _STOCK_SECTOR.get(item["stock"]["code"]) in rising_names]
         if tailwind:
-            lines.append(f"  ✅ 追い風（上昇業種に属する）: {' / '.join(tailwind)}")
-        if headwind:
-            lines.append(f"  ⚠️ 向かい風（下落業種に属する）: {' / '.join(headwind)}")
-        if not tailwind and not headwind:
-            lines.append("  → 監視銘柄の業種は上位変動なし")
+            lines.append(f"  ✅ 追い風銘柄: {' / '.join(tailwind)}")
 
-        # 全体トレンドコメント
-        top_pct = sectors[0]["change_pct"] if sectors else 0
-        bot_pct = sectors[-1]["change_pct"] if sectors else 0
-        if top_pct >= 3.0 and bot_pct <= -2.0:
-            trend_comment = "業種間の格差大→テーマ性強い相場（上昇業種に集中）"
-        elif top_pct >= 2.0:
-            trend_comment = "特定業種主導の上昇相場"
-        elif bot_pct <= -2.0:
-            trend_comment = "特定業種の売り圧力あり→全体は慎重"
-        else:
-            trend_comment = "業種間の格差小→全体感のある相場"
-        lines.append(f"  📊 トレンド: {trend_comment}")
-    else:
-        lines.append("  取得できませんでした")
     lines.append("")
     lines.append("=" * 52)
     lines.append("")
 
-    # --- 世界情勢（Al Jazeera） ---
-    lines.append("▼ 世界情勢（Al Jazeera）")
-    if world_news:
-        for n in world_news:
-            lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}")
-            lines.append(f"  {n['title']}")
-            if n["url"]:
-                lines.append(f"  {n['url']}")
-            lines.append("")
-    else:
-        lines.append("  ニュースを取得できませんでした")
+    # ============================================================
+    # ① 銘柄選定（ファンダメンタルズ評価）
+    # ============================================================
+    lines.append("▼ ① 銘柄選定（S=最優良 / A=優良 / B=普通 / C=要検討）")
+    lines.append("  配点: 財務25 + ROE10 + 流動性10 + バフェット5 = 50点満点")
+    lines.append("")
+    for item in stock_data:
+        sel = calc_selection_score(item)
+        fin = item.get("buffett", {})
+        sig = item.get("signals", {})
+        liq = sig.get("liquidity") or {}
+        price = item.get("price", {})
+        price_str = f"¥{price['price']:,.0f}" if price.get("price") else "--"
+        roe   = fin.get("roe")
+        eq    = fin.get("equity_ratio")
+        roic  = fin.get("roic")
+        om    = fin.get("op_margin")
+        buf   = "✔ バフェット通過" if item.get("buffett_passed") else "✘ バフェット不通過"
+        liq_s = liq.get("label", "--")
+
+        lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）  "
+                     f"【{sel['grade']}ランク {sel['score']}/50点】  {price_str}")
+        lines.append(f"    ROE:{roe}%  自己資本:{eq}%  ROIC:{roic}%  営業利益率:{om}%")
+        lines.append(f"    流動性:{liq_s}  {buf}")
         lines.append("")
     lines.append("=" * 52)
     lines.append("")
 
-    # --- WTI 原油価格 + シナリオ判定 ---
-    lines.append("▼ WTI 原油先物価格（ドル/バレル）")
-    if wti.get("price"):
-        sign = "+" if wti["change"] >= 0 else ""
-        wti_price = wti["price"]
-        lines.append(
-            f"  ${wti_price:,.2f}  "
-            f"（前日比 {sign}{wti['change']:+.2f} ／ {sign}{wti['change_pct']:+.2f}%）"
-        )
-        lines.append("")
-
-        # シナリオ判定
-        if wti_price < 90:
-            scenario = "A"
-            scenario_label = "🟢 シナリオA：停戦・封鎖解除（最良）"
-            scenario_desc = [
-                "  【状況】WTI $90以下 → 地政学リスク後退",
-                "  【アクション】確認翌営業日から順次エントリー開始",
-                "  【優先順】",
-                "    1位 日本電技（1723）目標 9,000円",
-                "    2位 新日本空調（1952）目標 3,400円",
-                "    3位 ローツェ（6323）目標 2,600円",
-            ]
-        elif wti_price <= 100:
-            scenario = "B"
-            scenario_label = "🟡 シナリオB：膠着継続（現状維持）"
-            scenario_desc = [
-                "  【状況】WTI $90〜$100 → 情勢変わらず",
-                "  【アクション】新規エントリー凍結継続",
-                "  【例外的エントリー候補】",
-                "    ・楽待（6037）910円逆指値維持のまま保有継続",
-                f"    ・JM（6055）WTI $95以下({'✅ 条件クリア' if wti_price <= 95 else '❌ 未達'})＋株価1,750円以上で買い増し検討",
-            ]
-        else:
-            scenario = "C"
-            scenario_label = "🔴 シナリオC：完全ロックダウン（最悪）"
-            scenario_desc = [
-                f"  【状況】WTI ${wti_price:.1f} → $100超・ホルムズ海峡リスク継続",
-                "  【アクション】全ポジション見直し・新規エントリー全面停止",
-                "  【必須対応】",
-                "    → 保有ポジションの損切りライン厳守",
-                "  【次のチェックポイント】",
-                f"    → WTI $100以下でシナリオB復帰",
-                f"    → WTI $90以下でシナリオA移行・エントリー開始",
-                "  【逆張り注目銘柄（保有不要・観察のみ）】",
-                "    ・新日本空調 → 原発緊急稼働で急騰可能性",
-                "    ・東京計器 → 防衛需要爆発",
-            ]
-
-        lines.append(f"  ■ 現在のシナリオ判定：{scenario_label}")
-        lines.append(f"  （A: <$90 エントリー可 ／ B: $90〜$100 凍結 ／ C: >$100 撤退）")
-        lines.append("")
-        lines.extend(scenario_desc)
-    else:
-        lines.append(f"  {wti.get('error', '取得失敗')}")
+    # ============================================================
+    # ② 売買計画（テクニカル+WTIシナリオ）
+    # ============================================================
+    lines.append("▼ ② 売買計画（エントリー判断）")
+    lines.append("  ※ シナリオCの間は全銘柄エントリー停止")
     lines.append("")
+    for item in stock_data:
+        entry = calc_entry_signal(item, wti)
+        sig   = item.get("signals", {})
+        price = item.get("price", {})
+        price_str = f"¥{price['price']:,.0f}" if price.get("price") else "--"
+        rsi      = sig.get("rsi")
+        ma25_dev = sig.get("ma25_dev")
+        vol_surge= sig.get("vol_surge")
+        macd     = sig.get("macd") or {}
+        boll     = sig.get("bollinger") or {}
+        cross    = sig.get("cross") or {}
+        tags     = sig.get("signals", [])
+
+        rsi_s  = f"RSI:{rsi:.1f}"          if rsi       is not None else "RSI:--"
+        ma_s   = f"25MA:{ma25_dev:+.1f}%"  if ma25_dev  is not None else "25MA:--"
+        vol_s  = f"出来高:{vol_surge:.1f}倍" if vol_surge is not None else "出来高:--"
+        hist   = macd.get("hist")
+        macd_s = f"MACD:{hist:+.3f}"       if hist      is not None else "MACD:--"
+        pct_b  = boll.get("pct_b")
+        bb_s   = f"BB:{pct_b:.0f}%"        if pct_b     is not None else "BB:--"
+        ma5    = cross.get("ma5")
+        cr_s   = f"5MA{'>' if cross.get('above') else '<'}25MA" if ma5 is not None else "--"
+        liq_s  = (sig.get("liquidity") or {}).get("label", "--")
+
+        sig_str = " / ".join(tags) if tags else "シグナルなし"
+
+        lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）  {price_str}")
+        lines.append(f"    {entry['entry_judge']}")
+        lines.append(f"    {rsi_s}  {ma_s}  {vol_s}")
+        lines.append(f"    {macd_s}  {bb_s}  {cr_s}")
+        lines.append(f"    流動性:{liq_s}")
+        lines.append(f"    → {sig_str}")
+        lines.append("")
     lines.append("=" * 52)
     lines.append("")
 
-    # --- バフェット指標スクリーニング サマリー ---
-    lines.append(f"▼ バフェット指標スクリーニング（監視{len(stock_data)}銘柄）")
+    # ============================================================
+    # バフェット指標詳細（選定の補足）
+    # ============================================================
+    lines.append(f"▼ バフェット指標詳細（監視{len(stock_data)}銘柄）")
     lines.append(f"  条件: ROE {ROE_MIN:.0f}%以上 かつ 自己資本比率 {EQUITY_RATIO_MIN:.0f}%以上")
     lines.append(f"  参考: ROIC≥10%=✓ / 営業利益率≥10%=✓ / CFパターン")
-    lines.append(f"        売上成長率 マイナス=⚠ / 来期益 -30%以下=⚠ / ヘルススコア /100")
-    lines.append(f"        PEG≤1=割安✓ / グレアム(PER×PBR)≤22.5=割安✓ / EV/EBITDA≤10=割安✓")
+    lines.append(f"        PEG≤1=割安✓ / グレアム≤22.5=割安✓ / EV/EBITDA≤10=割安✓")
+    lines.append("")
+    lines.append("")
+    lines.append("=" * 52)
     lines.append("")
 
     def _fmt_buffett_row(d: dict) -> list[str]:
@@ -1747,45 +1783,6 @@ def build_email_body(
             lines.extend(_fmt_buffett_row(d))
             lines.append("")
     lines.append("")
-    lines.append("=" * 52)
-    lines.append("")
-
-    # --- テクニカルシグナル ---
-    lines.append("▼ テクニカルシグナル（監視銘柄）【7指標＋流動性】")
-    lines.append("  ★強買=3指標以上一致 ◎買い=2指標 ○買い候補=1指標")
-    lines.append("  ▼売り=2指標以上 △売り候補=1指標")
-    lines.append("  流動性: ≥1億円/日=OK / 3000万〜1億=⚠️ / <3000万=❌")
-    lines.append("")
-    for item in stock_data:
-        sig       = item.get("signals", {})
-        rsi       = sig.get("rsi")
-        ma25_dev  = sig.get("ma25_dev")
-        vol_surge = sig.get("vol_surge")
-        macd      = sig.get("macd") or {}
-        boll      = sig.get("bollinger") or {}
-        cross     = sig.get("cross") or {}
-        liquidity = sig.get("liquidity") or {}
-        summary   = sig.get("summary", "様子見")
-        tags      = sig.get("signals", [])
-
-        rsi_s  = f"RSI:{rsi:.1f}"             if rsi       is not None else "RSI:--"
-        ma_s   = f"25MA:{ma25_dev:+.1f}%"     if ma25_dev  is not None else "25MA:--"
-        vol_s  = f"出来高:{vol_surge:.1f}倍"   if vol_surge is not None else "出来高:--"
-        hist   = macd.get("hist")
-        macd_s = f"MACD:{hist:+.3f}"          if hist      is not None else "MACD:--"
-        pct_b  = boll.get("pct_b")
-        bb_s   = f"BB%-B:{pct_b:.0f}%"        if pct_b     is not None else "BB:--"
-        ma5    = cross.get("ma5")
-        cr_s   = (f"5MA{'>' if cross.get('above') else '<'}25MA") if ma5 is not None else "クロス:--"
-        liq_s  = liquidity.get("label", "--")
-
-        sig_str = "\n    ".join(tags) if tags else "シグナルなし"
-        lines.append(f"  {item['stock']['name']}（{item['stock']['code']}）  → {summary}")
-        lines.append(f"    {rsi_s}  {ma_s}  {vol_s}")
-        lines.append(f"    {macd_s}  {bb_s}  {cr_s}")
-        lines.append(f"    流動性: {liq_s}")
-        lines.append(f"    {sig_str}")
-        lines.append("")
     lines.append("=" * 52)
     lines.append("")
 
@@ -1960,6 +1957,20 @@ def build_email_body(
     else:
         lines.append("  本日の条件合致銘柄はありませんでした")
     lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
+
+    # --- 世界情勢（Al Jazeera）※最後に掲載 ---
+    lines.append("▼ 世界情勢ニュース（Al Jazeera / 参考情報）")
+    if world_news:
+        for n in world_news:
+            lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}  {n['title']}")
+            if n["url"]:
+                lines.append(f"  {n['url']}")
+            lines.append("")
+    else:
+        lines.append("  ニュースを取得できませんでした")
+        lines.append("")
     lines.append("=" * 52)
     lines.append("")
 
