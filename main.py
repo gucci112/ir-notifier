@@ -354,6 +354,71 @@ def get_aljazeera_news(max_items: int = 7) -> list:
 
 
 # ============================================================
+# Reuters RSS → マクロ・地政学ニュース抽出
+# ============================================================
+_REUTERS_KEYWORDS = [
+    # 経済・金融
+    "economy", "economic", "inflation", "recession", "gdp", "trade",
+    "tariff", "sanction", "dollar", "currency", "market", "finance",
+    "bank", "interest rate", "federal reserve", "central bank", "imf",
+    "investment", "bond", "deficit", "export", "import",
+    # エネルギー
+    "oil", "gas", "energy", "opec", "crude", "petroleum", "fuel",
+    "pipeline", "lng", "nuclear",
+    # 地政学リスク
+    "war", "conflict", "tension", "crisis", "military", "ceasefire",
+    "missile", "coup", "nato", "invasion", "embargo", "strait",
+    "geopolit", "escalat", "sanction", "alliance",
+    # 企業・市場
+    "earnings", "revenue", "profit", "stock", "shares", "ipo",
+    "merger", "acquisition", "supply chain", "semiconductor",
+]
+
+def get_reuters_news(max_items: int = 5) -> list:
+    """Reuters RSSからマクロ・金融・地政学ニュースをスコアリングして返す"""
+    # Reuters Business / World ニュースのRSSフィード
+    feeds = [
+        f"https://feeds.reuters.com/reuters/businessNews?_={int(time.time())}",
+        f"https://feeds.reuters.com/Reuters/worldNews?_={int(time.time())}",
+    ]
+    scored = []
+    for url in feeds:
+        try:
+            res = requests.get(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Cache-Control": "no-cache",
+            }, timeout=15)
+            res.raise_for_status()
+            root = ET.fromstring(res.content)
+
+            for item in root.findall(".//item"):
+                title    = (item.findtext("title")       or "").strip()
+                link     = (item.findtext("link")        or "").strip()
+                pub_date = (item.findtext("pubDate")     or "").strip()
+                desc     = (item.findtext("description") or "").strip()
+
+                text  = (title + " " + desc).lower()
+                score = sum(1 for kw in _REUTERS_KEYWORDS if kw in text)
+                if score > 0:
+                    scored.append({
+                        "score":    score,
+                        "title":    title,
+                        "url":      link,
+                        "pub_date": pub_date,
+                    })
+        except Exception as e:
+            print(f"    [警告] Reuters RSS取得失敗 ({url}): {e}")
+
+    # 重複タイトル除去・スコア降順
+    seen, unique = set(), []
+    for n in sorted(scored, key=lambda x: x["score"], reverse=True):
+        if n["title"] not in seen:
+            seen.add(n["title"])
+            unique.append(n)
+    return unique[:max_items]
+
+
+# ============================================================
 # バフェット指標取得（kabutan.jp /stock/finance）
 # ============================================================
 def _extract_col_value(table, col_keywords: list, exact: bool = False) -> float | None:
@@ -1570,6 +1635,7 @@ def build_email_body(
     screened: list,
     nikkei: dict | None = None,
     sectors: list | None = None,
+    reuters_news: list | None = None,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -1960,8 +2026,22 @@ def build_email_body(
     lines.append("=" * 52)
     lines.append("")
 
+    # --- 世界情勢（Reuters）---
+    lines.append("▼ 世界情勢ニュース（Reuters）")
+    if reuters_news:
+        for n in reuters_news:
+            lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}  {n['title']}")
+            if n["url"]:
+                lines.append(f"  {n['url']}")
+            lines.append("")
+    else:
+        lines.append("  ニュースを取得できませんでした")
+        lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
+
     # --- 世界情勢（Al Jazeera）※最後に掲載 ---
-    lines.append("▼ 世界情勢ニュース（Al Jazeera / 参考情報）")
+    lines.append("▼ 世界情勢ニュース（Al Jazeera）")
     if world_news:
         for n in world_news:
             lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}  {n['title']}")
@@ -2144,6 +2224,8 @@ def main():
     # 世界情勢ニュース取得
     print("  アルジャジーラRSSを取得中...")
     world_news = get_aljazeera_news()
+    print("  Reuters RSSを取得中...")
+    reuters_news = get_reuters_news()
 
     # 決算進捗取得（EDINET APIキーが設定されている場合のみ）
     if EDINET_API_KEY:
@@ -2161,7 +2243,7 @@ def main():
     today   = date.today().strftime("%Y/%m/%d")
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
     body    = build_email_body(stock_data, wti, world_news, edinet_data, screened,
-                               nikkei=nikkei, sectors=sectors)
+                               nikkei=nikkei, sectors=sectors, reuters_news=reuters_news)
 
     print("メールを送信中...")
     send_email(subject, body)
