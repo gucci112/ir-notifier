@@ -2058,6 +2058,17 @@ def _build_html(body: str) -> str:
             html_lines.append('<div style="height:6px;"></div>')
             continue
 
+        # URLをボタンに変換（httpで始まる行）
+        if raw.strip().startswith("http"):
+            url = raw.strip()
+            html_lines.append(
+                f'<a href="{url}" style="display:inline-block;margin:2px 0 6px;'
+                f'padding:4px 10px;background:#2a2a2a;border:1px solid #555;'
+                f'border-radius:6px;color:#4fc3f7;font-size:12px;'
+                f'text-decoration:none;">▶ 開く</a>'
+            )
+            continue
+
         # 通常行
         html_lines.append(
             f'<div style="font-size:13px;color:#ddd;line-height:1.7;'
