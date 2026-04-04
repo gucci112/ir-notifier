@@ -2058,15 +2058,26 @@ def _build_html(body: str) -> str:
             html_lines.append('<div style="height:6px;"></div>')
             continue
 
-        # URLをボタンに変換（httpで始まる行）
+        # URLをボタンに変換（httpで始まる行）- 前の行に続けて表示
         if raw.strip().startswith("http"):
             url = raw.strip()
-            html_lines.append(
-                f'<a href="{url}" style="display:inline-block;margin:2px 0 6px;'
-                f'padding:4px 10px;background:#2a2a2a;border:1px solid #555;'
-                f'border-radius:6px;color:#4fc3f7;font-size:12px;'
-                f'text-decoration:none;">▶ 開く</a>'
-            )
+            # 前の通常行の末尾に▶ボタンを追加（前の行を置き換え）
+            if html_lines and 'word-break:break-all' in html_lines[-1]:
+                prev = html_lines.pop()
+                # 閉じdivの前にボタンを挿入
+                prev = prev.replace('</div>', 
+                    f' <a href="{url}" style="display:inline;margin-left:6px;'
+                    f'padding:2px 8px;background:#2a2a2a;border:1px solid #555;'
+                    f'border-radius:4px;color:#4fc3f7;font-size:11px;'
+                    f'text-decoration:none;">▶</a></div>')
+                html_lines.append(prev)
+            else:
+                html_lines.append(
+                    f'<a href="{url}" style="display:inline-block;margin:2px 0 6px;'
+                    f'padding:4px 10px;background:#2a2a2a;border:1px solid #555;'
+                    f'border-radius:6px;color:#4fc3f7;font-size:12px;'
+                    f'text-decoration:none;">▶</a>'
+                )
             continue
 
         # 通常行
