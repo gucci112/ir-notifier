@@ -413,6 +413,75 @@ def analyze_aljazeera_news(news_items: list) -> list:
 
 
 # ============================================================
+# Claude API — バフェット視点での銘柄コメント生成
+# ============================================================
+_BUFFETT_CRITERIA = """
+バフェット投資哲学の基準：
+1. ROE 15%以上を継続できるか（資本効率の高さ）
+2. 自己資本比率が高く財務健全か（借金に頼らない経営）
+3. 営業利益率 10%以上で競争優位性があるか（経済的な堀）
+4. PEG≤1で成長に対して株価が割安か
+5. EV/EBITDA≤10で企業価値が適正か
+6. CFパターンが安定型・成長型か（キャッシュ創出力）
+7. 来期利益予想が成長しているか（モメンタム）
+8. netCashRatio≥0（純現金がプラス、財務的安全余裕）
+""".strip()
+
+
+def analyze_with_buffett_lens(stock_data: list) -> dict:
+    """Claude Haiku でバフェット視点の銘柄コメントを生成する。
+    ANTHROPIC_API_KEY 未設定・エラー時は空dictを返す。
+    全銘柄を1回のAPIコールで処理してコストを最小化する。
+    戻り値: {code: {"verdict": str, "comment": str}}
+    """
+    if not ANTHROPIC_API_KEY or not stock_data:
+        return {}
+
+    lines = []
+    for d in stock_data:
+        f    = d.get("buffett", {})
+        name = d["stock"]["name"]
+        code = d["stock"]["code"]
+        lines.append(
+            f"[{code}] {name}: "
+            f"ROE={f.get('roe')}% 自己資本比率={f.get('equity_ratio')}% "
+            f"ROIC={f.get('roic')}% 営業利益率={f.get('op_margin')}% "
+            f"売上成長率={f.get('sales_growth')}% CFパターン={f.get('cf_pattern')} "
+            f"来期純利益予想={f.get('ni_forecast_yoy')}% "
+            f"PEG={f.get('peg')} EV/EBITDA={f.get('ev_ebitda')} "
+            f"netCashRatio={f.get('net_cash_ratio')} スコア={f.get('health_score')}/100"
+        )
+    stocks_text = "\n".join(lines)
+
+    prompt = (
+        f"{_BUFFETT_CRITERIA}\n\n"
+        "上記の基準に基づき、以下の日本株について各銘柄のバフェット視点での評価を行ってください。\n\n"
+        f"{stocks_text}\n\n"
+        "各銘柄について以下のJSON形式で回答してください：\n"
+        '{"verdict": "買い増し候補|保有継続|要観察|見送り", "comment": "日本語1〜2行のコメント"}\n\n'
+        "回答は銘柄コードをキーとするJSONオブジェクトのみを返してください。余分なテキストや```は不要です。\n"
+        '例: {"6055": {"verdict": "保有継続", "comment": "..."}, "4890": {"verdict": "要観察", "comment": "..."}}'
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```[^\n]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        result = json.loads(raw)
+        print(f"    Buffett分析完了: {len(result)}銘柄")
+        return result
+    except Exception as e:
+        print(f"    [警告] Buffett分析失敗: {e}")
+        return {}
+
+
+# ============================================================
 # 関税・地政学リスクアラート
 # ============================================================
 _TARIFF_KEYWORDS_EN = [
@@ -1815,6 +1884,7 @@ def build_email_body(
     sectors: list | None = None,
     reuters_news: list | None = None,
     nhk_risk_news: list | None = None,
+    buffett_analysis: dict | None = None,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -1958,7 +2028,7 @@ def build_email_body(
     lines.append("=" * 52)
     lines.append("")
 
-    def _fmt_buffett_row(d: dict) -> list[str]:
+    def _fmt_buffett_row(d: dict, bf_analysis: dict | None = None) -> list[str]:
         """1銘柄分のバフェット指標行を返す"""
         f    = d["buffett"]
         name = d["stock"]["name"]
@@ -2018,24 +2088,30 @@ def build_email_body(
         else:
             ncr_s = f"{ncr_v:.2f}⚠"
 
-        return [
+        rows = [
             f"    {name}（{code}）  【スコア: {hs_s}】",
             f"      ROE:{roe_s}  自己資本比率:{eq_s}  ROIC:{roic_s}  営業利益率:{om_s}",
             f"      売上成長率:{sg_s}  CFパターン:{cf_s}  来期純利益予想:{yoy_s}",
             f"      PEG:{peg_s}  グレアム:{gs_s}  EV/EBITDA:{ev_s}  netCashRatio:{ncr_s}",
         ]
+        if bf_analysis and code in bf_analysis:
+            ba = bf_analysis[code]
+            rows.append(f"      🧓 Buffett視点: {ba.get('verdict', '--')}")
+            if ba.get("comment"):
+                rows.append(f"      → {ba['comment']}")
+        return rows
 
     passed_items = [d for d in stock_data if d.get("buffett_passed")]
     failed_items = [d for d in stock_data if not d.get("buffett_passed")]
     if passed_items:
         lines.append("  ✔ 通過:")
         for d in passed_items:
-            lines.extend(_fmt_buffett_row(d))
+            lines.extend(_fmt_buffett_row(d, buffett_analysis))
             lines.append("")
     if failed_items:
         lines.append("  ✘ 不通過:")
         for d in failed_items:
-            lines.extend(_fmt_buffett_row(d))
+            lines.extend(_fmt_buffett_row(d, buffett_analysis))
             lines.append("")
     lines.append("")
     lines.append("=" * 52)
@@ -2513,6 +2589,13 @@ def main():
         print("  EDINET_API_KEY 未設定のため決算進捗をスキップ")
         edinet_data = []
 
+    # Buffett視点分析
+    if ANTHROPIC_API_KEY:
+        print("  Claude Haiku でBuffett視点分析中...")
+        buffett_analysis = analyze_with_buffett_lens(stock_data)
+    else:
+        buffett_analysis = {}
+
     # 銘柄スクリーニング
     print("  銘柄スクリーニング中 (出来高急増ランキング 最大8ページ)...")
     screened = get_screened_stocks()
@@ -2523,7 +2606,8 @@ def main():
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
     body    = build_email_body(stock_data, wti, world_news, edinet_data, screened,
                                nikkei=nikkei, sectors=sectors, reuters_news=reuters_news,
-                               nhk_risk_news=nhk_risk_news)
+                               nhk_risk_news=nhk_risk_news,
+                               buffett_analysis=buffett_analysis)
 
     print("メールを送信中...")
     send_email(subject, body)
