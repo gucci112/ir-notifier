@@ -854,7 +854,8 @@ def get_financial_data(code: str) -> dict:
                         (sales_actual[0] - sales_actual[1]) / sales_actual[1] * 100, 1
                     )
 
-        # ROIC = 営業利益(税前) / 投下資本（edinetdb.jp方式: 純資産 + 有利子負債 - 現金）
+        # 税前ROIC = 営業利益(EBIT) / 投下資本（edinetdb.jp方式: 純資産 + 有利子負債 - 現金）
+        # ※ 営業利益は税引前利益であるため、このROICは税前ベース。閾値 ≥15%
         roic = None
         if op_income is not None and equity is not None and equity > 0:
             dr              = debt_ratio if debt_ratio is not None else 0.0
@@ -2079,7 +2080,7 @@ def build_email_body(
     # ============================================================
     lines.append(f"▼ バフェット指標詳細（監視{len(stock_data)}銘柄）")
     lines.append(f"  条件: ROE {ROE_MIN:.0f}%以上 かつ 自己資本比率 {EQUITY_RATIO_MIN:.0f}%以上")
-    lines.append(f"  参考: ROIC≥15%=✓ / 営業利益率≥10%=✓ / CFパターン")
+    lines.append(f"  参考: ROIC(税前)≥15%=✓ / 営業利益率≥10%=✓ / CFパターン")
     lines.append(f"        PEG≤1=割安✓ / グレアム≤22.5=割安✓ / EV/EBITDA≤10=割安✓")
     lines.append("")
     lines.append("")
@@ -2096,7 +2097,7 @@ def build_email_body(
         eq_s   = f"{f['equity_ratio']}%"  if f["equity_ratio"] is not None else "--"
 
         roic_v = f.get("roic")
-        roic_s = (f"{roic_v}%{'✓' if roic_v >= 15 else '✗'}"
+        roic_s = (f"{roic_v}%(税前){'✓' if roic_v >= 15 else '✗'}"
                   if roic_v is not None else "--")
 
         om_v   = f.get("op_margin")
