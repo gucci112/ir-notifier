@@ -4,6 +4,8 @@ IR情報・WTI原油価格 自動通知スクリプト
 毎朝 GitHub Actions で自動実行 → Resend でメール送信
 """
 
+from __future__ import annotations
+
 import os
 import re
 import io
@@ -13,6 +15,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import resend
 import requests
+import anthropic
 from datetime import date, timedelta
 from bs4 import BeautifulSoup
 
@@ -23,6 +26,7 @@ resend.api_key     = os.environ["RESEND_API_KEY"]          # Resend API キー
 EMAIL_FROM         = os.environ["EMAIL_FROM"]               # 送信元アドレス
 EMAIL_TO           = os.environ["EMAIL_TO"]                 # 受信先メールアドレス
 EDINET_API_KEY     = os.environ.get("EDINET_API_KEY", "")  # EDINET API キー（任意）
+ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")  # Claude API キー（任意）
 
 # ============================================================
 # 監視銘柄リスト
@@ -354,6 +358,109 @@ def get_aljazeera_news(max_items: int = 7) -> list:
 
 
 # ============================================================
+# Claude API — Al Jazeeraニュース 株価影響判定＋日本語要約
+# ============================================================
+def analyze_aljazeera_news(news_items: list) -> list:
+    """Claude Haiku で Al Jazeera ニュースを分析し impact/summary を付与して返す。
+    ANTHROPIC_API_KEY 未設定時はそのまま返す（フォールバック）。
+    全記事を1回のAPIコールで処理してコストを最小化する。
+    """
+    if not ANTHROPIC_API_KEY or not news_items:
+        return news_items
+
+    articles_text = "\n".join(
+        f"[{i + 1}] {n['title']}"
+        for i, n in enumerate(news_items)
+    )
+    prompt = (
+        "以下のニュース記事が日本株市場に影響を与える可能性があるか判断してください。\n"
+        "各記事について:\n"
+        "- 影響がある場合: {\"impact\": \"high\", \"summary\": \"日本語要約1〜2行\"}\n"
+        "- 影響がない場合: {\"impact\": \"low\"}\n\n"
+        "記事:\n"
+        f"{articles_text}\n\n"
+        "回答は上記と同じ順序でJSONオブジェクトの配列のみを返してください。"
+        "余分なテキストや```は不要です。例: [{\"impact\":\"high\",\"summary\":\"...\"},{\"impact\":\"low\"}]"
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # コードブロック除去（念のため）
+        raw = re.sub(r"^```[^\n]*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+        results = json.loads(raw)
+
+        analyzed = []
+        for i, n in enumerate(news_items):
+            r = results[i] if i < len(results) else {"impact": "low"}
+            analyzed.append({
+                **n,
+                "impact":  r.get("impact", "low"),
+                "summary": r.get("summary", ""),
+            })
+        print(f"    Claude分析完了: high={sum(1 for a in analyzed if a['impact']=='high')}件")
+        return analyzed
+
+    except Exception as e:
+        print(f"    [警告] Claude API分析失敗: {e}")
+        return news_items  # フォールバック: 元データをそのまま返す
+
+
+# ============================================================
+# 関税・地政学リスクアラート
+# ============================================================
+_TARIFF_KEYWORDS_EN = [
+    "tariff", "trade war", "sanctions", "geopolitical", "export control",
+    "trade restriction", "customs duty", "protectionism", "trump trade",
+]
+
+_TARIFF_KEYWORDS_JA = [
+    "関税", "トランプ", "貿易摩擦", "経済制裁", "輸出規制",
+    "地政学", "円安", "通商", "保護主義", "半導体規制",
+]
+
+_NHK_RSS_FEEDS = [
+    ("経済", "https://www3.nhk.or.jp/rss/news/cat4.xml"),
+    ("国際", "https://www3.nhk.or.jp/rss/news/cat6.xml"),
+]
+
+
+def get_nhk_risk_news(max_per_feed: int = 5) -> list:
+    """NHK経済・国際RSSから関税・地政学リスク関連ニュースを取得する。"""
+    results = []
+    for _category, url in _NHK_RSS_FEEDS:
+        try:
+            res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            res.raise_for_status()
+            root = ET.fromstring(res.content)
+            count = 0
+            for item in root.findall(".//item"):
+                if count >= max_per_feed:
+                    break
+                title    = (item.findtext("title")   or "").strip()
+                link     = (item.findtext("link")    or "").strip()
+                pub_date = (item.findtext("pubDate") or "").strip()
+                desc     = (item.findtext("description") or "").strip()
+                text     = title + " " + desc
+                if any(kw in text for kw in _TARIFF_KEYWORDS_JA):
+                    results.append({
+                        "title":    title,
+                        "url":      link,
+                        "pub_date": pub_date,
+                    })
+                    count += 1
+        except Exception as e:
+            print(f"    [警告] NHK RSS取得失敗 ({url}): {e}")
+    return results
+
+
+# ============================================================
 # Reuters RSS → マクロ・地政学ニュース抽出
 # ============================================================
 _REUTERS_KEYWORDS = [
@@ -652,11 +759,13 @@ def get_financial_data(code: str) -> dict:
                         (sales_actual[0] - sales_actual[1]) / sales_actual[1] * 100, 1
                     )
 
-        # ROIC = NOPAT(営業利益×0.7) / 投下資本(自己資本×(1+有利子負債倍率))
+        # ROIC = 営業利益(税前) / 投下資本（edinetdb.jp方式: 純資産 + 有利子負債 - 現金）
         roic = None
         if op_income is not None and equity is not None and equity > 0:
-            dr   = debt_ratio if debt_ratio is not None else 0.0
-            roic = round(op_income * 0.7 / (equity * (1 + dr)) * 100, 1)
+            dr              = debt_ratio if debt_ratio is not None else 0.0
+            invested_capital = equity * (1 + dr) - (cash or 0)
+            if invested_capital > 0:
+                roic = round(op_income / invested_capital * 100, 1)
 
         # CFパターン判定
         cf_pattern = None
@@ -679,11 +788,18 @@ def get_financial_data(code: str) -> dict:
             graham = round(per * pbr, 1)
 
         # EV/EBITDA（EBITDAは営業利益で代替、kabutan.jpに減価償却費の個別開示なし）
+        # EV = 時価総額 + 有利子負債 - 現金（edinetdb.jp方式と同一）
         ev_ebitda = None
+        _interest_debt = (equity or 0) * (debt_ratio if debt_ratio is not None else 0.0)
         if mktcap_mn is not None and op_income is not None and op_income > 0:
-            interest_debt = (equity or 0) * (debt_ratio or 0)
-            ev = mktcap_mn + interest_debt - (cash or 0)
+            ev = mktcap_mn + _interest_debt - (cash or 0)
             ev_ebitda = round(ev / op_income, 1)
+
+        # netCashRatio（清原式近似）= (現金等残高 - 有利子負債) / 時価総額
+        # ※ edinetdb.jp正式式は (流動資産 - 負債合計) / 時価総額 だが kabutan.jpから取得不可のため近似
+        net_cash_ratio = None
+        if cash is not None and mktcap_mn is not None and mktcap_mn > 0:
+            net_cash_ratio = round((cash - _interest_debt) / mktcap_mn, 2)
 
         # ヘルススコア（100点満点）
         financials_for_score = {
@@ -695,7 +811,8 @@ def get_financial_data(code: str) -> dict:
         print(
             f"    財務データ: ROE={roe} 自己資本比率={equity_ratio} ROIC={roic}% "
             f"営業利益率={op_margin}% 売上成長率={sales_growth}% CF={cf_pattern} "
-            f"来期益={ni_forecast_yoy}% PEG={peg} グレアム={graham} EV/EBITDA={ev_ebitda} スコア={health_score}"
+            f"来期益={ni_forecast_yoy}% PEG={peg} グレアム={graham} EV/EBITDA={ev_ebitda} "
+            f"netCashRatio={net_cash_ratio} スコア={health_score}"
         )
         return {
             "roe": roe, "equity_ratio": equity_ratio,
@@ -705,6 +822,7 @@ def get_financial_data(code: str) -> dict:
             "health_score": health_score,
             "per": per, "pbr": pbr,
             "peg": peg, "graham": graham, "ev_ebitda": ev_ebitda,
+            "net_cash_ratio": net_cash_ratio,
         }
 
     except Exception as e:
@@ -715,6 +833,7 @@ def get_financial_data(code: str) -> dict:
             "op_margin": None, "sales_growth": None, "health_score": 0,
             "per": None, "pbr": None,
             "peg": None, "graham": None, "ev_ebitda": None,
+            "net_cash_ratio": None,
         }
 
 
@@ -1240,9 +1359,12 @@ _COL_PER    = 9
 
 
 def _get_op_profit(code: str) -> dict:
-    """kabutan.jp 財務ページから営業利益・PBR・時価総額を取得する。"""
+    """kabutan.jp 財務ページから営業利益・PBR・時価総額・売上成長率・netCashRatioを取得する。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
-    result = {"op_profit": None, "pbr": None, "mktcap_mn": None}
+    result = {
+        "op_profit": None, "pbr": None, "mktcap_mn": None,
+        "sales_growth": None, "net_cash_ratio": None,
+    }
     try:
         session = _get_kabutan_session()
         res = session.get(url, headers={"Referer": "https://kabutan.jp/"}, timeout=10)
@@ -1261,31 +1383,76 @@ def _get_op_profit(code: str) -> dict:
                 if len(mc_cells) >= 2:
                     result["mktcap_mn"] = _parse_mktcap_mn(mc_cells[1])
 
-        # 営業益（直近実績）
+        _equity = None
+        _debt_ratio = None
+        _cash = None
+
         for table in tables:
             rows = table.find_all("tr")
             if not rows:
                 continue
             header = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
-            if "営業益" not in header:
-                continue
-            op_col = header.index("営業益")
-            for row in reversed(rows[1:]):
-                cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
-                if not cells or not cells[0]:
-                    continue
-                if cells[0].startswith("予") or "前期比" in cells[0]:
-                    continue
-                if len(cells) > op_col:
-                    val = cells[op_col].replace(",", "")
-                    if val and val not in ("－", ""):
-                        try:
-                            result["op_profit"] = float(val)
+            header_text = " ".join(header)
+
+            # 営業益（直近実績）
+            if result["op_profit"] is None and "営業益" in header:
+                op_col = header.index("営業益")
+                for row in reversed(rows[1:]):
+                    cells = [c.get_text(strip=True) for c in row.find_all(["th", "td"])]
+                    if not cells or not cells[0]:
+                        continue
+                    if cells[0].startswith("予") or "前期比" in cells[0]:
+                        continue
+                    if len(cells) > op_col:
+                        val = cells[op_col].replace(",", "")
+                        if val and val not in ("－", ""):
+                            try:
+                                result["op_profit"] = float(val)
+                                break
+                            except ValueError:
+                                pass
+
+            # 財務テーブル（自己資本・有利子負債倍率）
+            if _equity is None and "自己資本比率" in header_text and "有利子負債倍率" in header_text:
+                _equity     = _extract_col_value(table, ["自己資本"], exact=True)
+                _debt_ratio = _extract_col_value(table, ["有利子負債倍率"])
+
+            # CFテーブル（現金等残高）
+            if _cash is None and "営業CF" in header_text and "投資CF" in header_text:
+                _cash = _extract_col_value(table, ["現金等残高"], exact=True)
+
+            # 売上成長率（通期決算テーブル）
+            if result["sales_growth"] is None and "最終益" in header and "修正1株配" in header:
+                sales_col = header.index("売上高") if "売上高" in header else None
+                if sales_col is not None:
+                    sales_actual: list[float] = []
+                    for row in reversed(rows[1:]):
+                        if len(sales_actual) >= 2:
                             break
-                        except ValueError:
-                            pass
-            if result["op_profit"] is not None:
-                break
+                        cells = row.find_all(["th", "td"])
+                        if not cells:
+                            continue
+                        label = cells[0].get_text(strip=True)
+                        if label.startswith("予") or "前期比" in label:
+                            continue
+                        if len(cells) > sales_col:
+                            s_raw = cells[sales_col].get_text(strip=True).replace(",", "").strip()
+                            try:
+                                sales_actual.append(float(s_raw))
+                            except ValueError:
+                                pass
+                    if len(sales_actual) == 2 and sales_actual[1] != 0:
+                        result["sales_growth"] = round(
+                            (sales_actual[0] - sales_actual[1]) / sales_actual[1] * 100, 1
+                        )
+
+        # netCashRatio（清原式近似）= (現金等残高 - 有利子負債) / 時価総額
+        # ※ edinetdb.jp正式式は (流動資産 - 負債合計) / 時価総額 だが kabutan.jpから取得不可のため近似
+        mktcap = result["mktcap_mn"]
+        if _cash is not None and mktcap is not None and mktcap > 0:
+            interest_debt_val = (_equity or 0) * (_debt_ratio or 0)
+            result["net_cash_ratio"] = round((_cash - interest_debt_val) / mktcap, 2)
+
     except Exception as e:
         print(f"    [警告] {code} 営業利益取得失敗: {e}")
     return result
@@ -1358,11 +1525,14 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             except ValueError:
                 volume = 0
 
-            # 営業利益チェック（赤字企業の除外）+ PBR・時価総額取得
-            code     = raw[_COL_CODE]
-            fin_info = _get_op_profit(code)
-            op_profit  = fin_info["op_profit"]
-            pbr_screen = fin_info["pbr"]
+            # 営業利益チェック（赤字企業の除外）+ PBR・時価総額・売上成長率取得
+            code          = raw[_COL_CODE]
+            fin_info      = _get_op_profit(code)
+            op_profit       = fin_info["op_profit"]
+            pbr_screen      = fin_info["pbr"]
+            mktcap_mn       = fin_info["mktcap_mn"]
+            sales_growth    = fin_info["sales_growth"]
+            net_cash_ratio  = fin_info["net_cash_ratio"]
             if op_profit is not None and op_profit <= 0:
                 print(f"    [{code}] {name} 営業利益マイナス({op_profit:,.0f}百万円) → 除外")
                 continue
@@ -1370,20 +1540,28 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             op_label = (
                 f"{op_profit:+,.0f}百万円" if op_profit is not None else "確認不可"
             )
-            graham_screen = round(per * pbr_screen, 1) if pbr_screen is not None else None
+            graham_screen    = round(per * pbr_screen, 1) if pbr_screen is not None else None
+            peg_screen       = (round(per / sales_growth, 2)
+                                if sales_growth is not None and sales_growth > 0 else None)
+            ev_ebitda_screen = (round(mktcap_mn / op_profit, 1)
+                                if mktcap_mn is not None and op_profit is not None and op_profit > 0
+                                else None)
 
             results.append({
-                "code":        code,
-                "name":        name,
-                "market":      market,
-                "price":       price,
-                "per":         per,
-                "pbr":         pbr_screen,
-                "graham":      graham_screen,
-                "volume":      volume,
-                "op_profit":   op_label,
-                "stop_loss":   round(price * 0.92, 1),
-                "take_profit": round(price * 1.25, 1),
+                "code":           code,
+                "name":           name,
+                "market":         market,
+                "price":          price,
+                "per":            per,
+                "pbr":            pbr_screen,
+                "graham":         graham_screen,
+                "peg":            peg_screen,
+                "ev_ebitda":      ev_ebitda_screen,
+                "net_cash_ratio": net_cash_ratio,
+                "volume":         volume,
+                "op_profit":      op_label,
+                "stop_loss":      round(price * 0.92, 1),
+                "take_profit":    round(price * 1.25, 1),
             })
 
             if len(results) >= max_results:
@@ -1636,6 +1814,7 @@ def build_email_body(
     nikkei: dict | None = None,
     sectors: list | None = None,
     reuters_news: list | None = None,
+    nhk_risk_news: list | None = None,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -1772,7 +1951,7 @@ def build_email_body(
     # ============================================================
     lines.append(f"▼ バフェット指標詳細（監視{len(stock_data)}銘柄）")
     lines.append(f"  条件: ROE {ROE_MIN:.0f}%以上 かつ 自己資本比率 {EQUITY_RATIO_MIN:.0f}%以上")
-    lines.append(f"  参考: ROIC≥10%=✓ / 営業利益率≥10%=✓ / CFパターン")
+    lines.append(f"  参考: ROIC≥15%=✓ / 営業利益率≥10%=✓ / CFパターン")
     lines.append(f"        PEG≤1=割安✓ / グレアム≤22.5=割安✓ / EV/EBITDA≤10=割安✓")
     lines.append("")
     lines.append("")
@@ -1789,7 +1968,7 @@ def build_email_body(
         eq_s   = f"{f['equity_ratio']}%"  if f["equity_ratio"] is not None else "--"
 
         roic_v = f.get("roic")
-        roic_s = (f"{roic_v}%{'✓' if roic_v >= 10 else '✗'}"
+        roic_s = (f"{roic_v}%{'✓' if roic_v >= 15 else '✗'}"
                   if roic_v is not None else "--")
 
         om_v   = f.get("op_margin")
@@ -1829,11 +2008,21 @@ def build_email_body(
         ev_s   = (f"{ev_v:.1f}倍{'✓' if ev_v <= 10 else ''}"
                   if ev_v is not None else "--")
 
+        ncr_v  = f.get("net_cash_ratio")
+        if ncr_v is None:
+            ncr_s = "--"
+        elif ncr_v >= 0.3:
+            ncr_s = f"{ncr_v:.2f}✓"
+        elif ncr_v >= 0:
+            ncr_s = f"{ncr_v:.2f}"
+        else:
+            ncr_s = f"{ncr_v:.2f}⚠"
+
         return [
             f"    {name}（{code}）  【スコア: {hs_s}】",
             f"      ROE:{roe_s}  自己資本比率:{eq_s}  ROIC:{roic_s}  営業利益率:{om_s}",
             f"      売上成長率:{sg_s}  CFパターン:{cf_s}  来期純利益予想:{yoy_s}",
-            f"      PEG:{peg_s}  グレアム:{gs_s}  EV/EBITDA:{ev_s}",
+            f"      PEG:{peg_s}  グレアム:{gs_s}  EV/EBITDA:{ev_s}  netCashRatio:{ncr_s}",
         ]
 
     passed_items = [d for d in stock_data if d.get("buffett_passed")]
@@ -1952,6 +2141,21 @@ def build_email_body(
             pbr_s    = f"{s['pbr']:.2f}倍" if s.get("pbr") is not None else "--"
             graham_s = (f"{gv:.1f}{'✓' if gv <= 22.5 else ''}"
                         if gv is not None else "--")
+            peg_v    = s.get("peg")
+            peg_s    = (f"{peg_v:.2f}{'✓' if peg_v <= 1 else ''}"
+                        if peg_v is not None else "--")
+            ev_v     = s.get("ev_ebitda")
+            ev_s     = (f"{ev_v:.1f}倍{'✓' if ev_v <= 10 else ''}"
+                        if ev_v is not None else "--")
+            ncr_v    = s.get("net_cash_ratio")
+            if ncr_v is None:
+                ncr_s = "--"
+            elif ncr_v >= 0.3:
+                ncr_s = f"{ncr_v:.2f}✓"
+            elif ncr_v >= 0:
+                ncr_s = f"{ncr_v:.2f}"
+            else:
+                ncr_s = f"{ncr_v:.2f}⚠"
 
             # --- StockRadar 簡易判定 ---
             radar_pass = []
@@ -1973,6 +2177,27 @@ def build_email_body(
                     radar_pass.append(f"グレアム{gv:.1f}✓")
                 else:
                     radar_fail.append(f"グレアム{gv:.1f}✗")
+
+            # PEG判定
+            if peg_v is not None:
+                if peg_v <= 1:
+                    radar_pass.append(f"PEG{peg_v:.2f}✓")
+                else:
+                    radar_fail.append(f"PEG{peg_v:.2f}✗")
+
+            # EV/EBITDA判定
+            if ev_v is not None:
+                if ev_v <= 10:
+                    radar_pass.append(f"EV/EBITDA{ev_v:.1f}倍✓")
+                else:
+                    radar_fail.append(f"EV/EBITDA{ev_v:.1f}倍✗")
+
+            # netCashRatio判定
+            if ncr_v is not None:
+                if ncr_v >= 0.3:
+                    radar_pass.append(f"netCashRatio{ncr_v:.2f}✓")
+                elif ncr_v < 0:
+                    radar_fail.append(f"netCashRatio{ncr_v:.2f}⚠")
 
             # 営業利益判定（プラス確認済みだがラベル表示）
             op = s.get("op_profit", "")
@@ -2012,6 +2237,7 @@ def build_email_body(
                 f"  株価：{s['price']:,.0f}円  PER：{s['per']:.1f}倍  PBR：{pbr_s}"
                 f"  グレアム：{graham_s}"
             )
+            lines.append(f"  PEG：{peg_s}  EV/EBITDA：{ev_s}  netCashRatio：{ncr_s}")
             lines.append(f"  流動性：{liq_s}  出来高：{s['volume']:,}")
             lines.append(f"  営業利益（直近通期）：{s['op_profit']}")
             if radar_pass:
@@ -2040,17 +2266,63 @@ def build_email_body(
     lines.append("=" * 52)
     lines.append("")
 
+    # --- 関税・地政学リスクアラート ---
+    aj_risk = [n for n in (world_news or [])
+               if any(kw in (n.get("title", "") + " " + n.get("url", "")).lower()
+                      for kw in _TARIFF_KEYWORDS_EN)][:5]
+    nhk_risk = (nhk_risk_news or [])[:5]
+
+    if aj_risk or nhk_risk:
+        lines.append("⚠️ 関税・地政学リスクアラート")
+        lines.append("=" * 52)
+        if aj_risk:
+            lines.append("  🌐 Al Jazeera")
+            for n in aj_risk:
+                dt = n["pub_date"][:16] if n.get("pub_date") else "-"
+                lines.append(f"  {dt}  {n['title']}")
+                if n.get("url"):
+                    lines.append(f"  {n['url']}")
+                lines.append("")
+        if nhk_risk:
+            lines.append("  🇯🇵 NHK")
+            for n in nhk_risk:
+                dt = n["pub_date"][:16] if n.get("pub_date") else "-"
+                lines.append(f"  {dt}  {n['title']}")
+                if n.get("url"):
+                    lines.append(f"  {n['url']}")
+                lines.append("")
+        lines.append("=" * 52)
+        lines.append("")
+
     # --- 世界情勢（Al Jazeera）※最後に掲載 ---
-    lines.append("▼ 世界情勢ニュース（Al Jazeera）")
-    if world_news:
-        for n in world_news:
-            lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}  {n['title']}")
-            if n["url"]:
-                lines.append(f"  {n['url']}")
+    # impact:high 記事のみ表示（Claude分析済みの場合）、未分析はすべて表示
+    has_impact_field = world_news and "impact" in world_news[0]
+    if has_impact_field:
+        high_news = [n for n in world_news if n.get("impact") == "high"][:5]
+        lines.append("▼ 世界情勢ニュース（Al Jazeera × Claude分析）")
+        if high_news:
+            for n in high_news:
+                dt = n["pub_date"][:16] if n.get("pub_date") else "-"
+                lines.append(f"  {dt}  {n['title']}")
+                if n.get("summary"):
+                    lines.append(f"  → {n['summary']}")
+                if n.get("url"):
+                    lines.append(f"  {n['url']}")
+                lines.append("")
+        else:
+            lines.append("  本日は日本株市場への影響が高いニュースはありませんでした")
             lines.append("")
     else:
-        lines.append("  ニュースを取得できませんでした")
-        lines.append("")
+        lines.append("▼ 世界情勢ニュース（Al Jazeera）")
+        if world_news:
+            for n in world_news:
+                lines.append(f"  {n['pub_date'][:16] if n.get('pub_date') else '-'}  {n['title']}")
+                if n.get("url"):
+                    lines.append(f"  {n['url']}")
+                lines.append("")
+        else:
+            lines.append("  ニュースを取得できませんでした")
+            lines.append("")
     lines.append("=" * 52)
     lines.append("")
 
@@ -2224,8 +2496,15 @@ def main():
     # 世界情勢ニュース取得
     print("  アルジャジーラRSSを取得中...")
     world_news = get_aljazeera_news()
+    if ANTHROPIC_API_KEY:
+        print("  Claude Haiku でニュース影響度を分析中...")
+        world_news = analyze_aljazeera_news(world_news)
+    else:
+        print("  ANTHROPIC_API_KEY 未設定のためClaude分析をスキップ")
     print("  Reuters RSSを取得中...")
     reuters_news = get_reuters_news()
+    print("  NHK 関税・地政学リスクニュースを取得中...")
+    nhk_risk_news = get_nhk_risk_news()
 
     # 決算進捗取得（EDINET APIキーが設定されている場合のみ）
     if EDINET_API_KEY:
@@ -2243,7 +2522,8 @@ def main():
     today   = date.today().strftime("%Y/%m/%d")
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
     body    = build_email_body(stock_data, wti, world_news, edinet_data, screened,
-                               nikkei=nikkei, sectors=sectors, reuters_news=reuters_news)
+                               nikkei=nikkei, sectors=sectors, reuters_news=reuters_news,
+                               nhk_risk_news=nhk_risk_news)
 
     print("メールを送信中...")
     send_email(subject, body)
