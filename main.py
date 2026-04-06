@@ -535,9 +535,9 @@ def get_nhk_risk_news(max_per_feed: int = 5) -> list:
 
 
 # ============================================================
-# Reuters RSS → マクロ・地政学ニュース抽出
+# 世界ビジネスニュース RSS → マクロ・地政学ニュース抽出
 # ============================================================
-_REUTERS_KEYWORDS = [
+_WORLD_NEWS_KEYWORDS = [
     # 経済・金融
     "economy", "economic", "inflation", "recession", "gdp", "trade",
     "tariff", "sanction", "dollar", "currency", "market", "finance",
@@ -555,18 +555,29 @@ _REUTERS_KEYWORDS = [
     "merger", "acquisition", "supply chain", "semiconductor",
 ]
 
-def get_reuters_news(max_items: int = 5) -> list:
-    """Reuters RSSからマクロ・金融・地政学ニュースをスコアリングして返す"""
-    # Reuters Business / World ニュースのRSSフィード
-    feeds = [
-        f"https://feeds.reuters.com/reuters/businessNews?_={int(time.time())}",
-        f"https://feeds.reuters.com/Reuters/worldNews?_={int(time.time())}",
-    ]
-    scored = []
-    for url in feeds:
+# (source_name, url) の順で試す。最初に成功したものを採用
+_WORLD_NEWS_FEEDS = [
+    ("BBC Business",        "https://feeds.bbci.co.uk/news/business/rss.xml"),
+    ("AP Business",         "https://rsshub.app/ap/topics/business"),
+    ("Financial Times",     "https://www.ft.com/rss/home/uk"),
+]
+
+_WORLD_NEWS_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def get_world_business_news(max_items: int = 5) -> tuple[list, str]:
+    """複数のRSSソースを順番に試し、最初に取得できたものからニュースを返す。
+    戻り値: (ニュースリスト, ソース名)"""
+    for source_name, url in _WORLD_NEWS_FEEDS:
+        scored = []
         try:
             res = requests.get(url, headers={
-                "User-Agent": "Mozilla/5.0",
+                "User-Agent": _WORLD_NEWS_UA,
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
                 "Cache-Control": "no-cache",
             }, timeout=15)
             res.raise_for_status()
@@ -579,7 +590,7 @@ def get_reuters_news(max_items: int = 5) -> list:
                 desc     = (item.findtext("description") or "").strip()
 
                 text  = (title + " " + desc).lower()
-                score = sum(1 for kw in _REUTERS_KEYWORDS if kw in text)
+                score = sum(1 for kw in _WORLD_NEWS_KEYWORDS if kw in text)
                 if score > 0:
                     scored.append({
                         "score":    score,
@@ -587,16 +598,29 @@ def get_reuters_news(max_items: int = 5) -> list:
                         "url":      link,
                         "pub_date": pub_date,
                     })
-        except Exception as e:
-            print(f"    [警告] Reuters RSS取得失敗 ({url}): {e}")
 
-    # 重複タイトル除去・スコア降順
-    seen, unique = set(), []
-    for n in sorted(scored, key=lambda x: x["score"], reverse=True):
-        if n["title"] not in seen:
-            seen.add(n["title"])
-            unique.append(n)
-    return unique[:max_items]
+            if scored:
+                seen, unique = set(), []
+                for n in sorted(scored, key=lambda x: x["score"], reverse=True):
+                    if n["title"] not in seen:
+                        seen.add(n["title"])
+                        unique.append(n)
+                print(f"    世界ビジネスニュース取得成功: {source_name} ({len(unique)}件)")
+                return unique[:max_items], source_name
+
+            print(f"    [情報] {source_name}: 条件合致ニュースなし、次のソースへ")
+
+        except Exception as e:
+            print(f"    [警告] {source_name} RSS取得失敗: {e}")
+
+    print("    [警告] すべてのニュースソースで取得失敗")
+    return [], ""
+
+
+# 後方互換エイリアス（既存呼び出し箇所が残っている場合に備えて）
+def get_reuters_news(max_items: int = 5) -> list:
+    news, _ = get_world_business_news(max_items)
+    return news
 
 
 # ============================================================
@@ -1942,6 +1966,7 @@ def build_email_body(
     nikkei: dict | None = None,
     sectors: list | None = None,
     reuters_news: list | None = None,
+    reuters_source: str = "",
     nhk_risk_news: list | None = None,
     buffett_analysis: dict | None = None,
 ) -> str:
@@ -2395,8 +2420,9 @@ def build_email_body(
     lines.append("=" * 52)
     lines.append("")
 
-    # --- 世界情勢（Reuters）---
-    lines.append("▼ 世界情勢ニュース（Reuters）")
+    # --- 世界情勢（ビジネスニュース）---
+    section_label = f"▼ 世界情勢ニュース（{reuters_source}）" if reuters_source else "▼ 世界情勢ニュース"
+    lines.append(section_label)
     if reuters_news:
         for n in reuters_news:
             lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}  {n['title']}")
@@ -2644,8 +2670,8 @@ def main():
         world_news = analyze_aljazeera_news(world_news)
     else:
         print("  ANTHROPIC_API_KEY 未設定のためClaude分析をスキップ")
-    print("  Reuters RSSを取得中...")
-    reuters_news = get_reuters_news()
+    print("  世界ビジネスニュースRSSを取得中...")
+    reuters_news, reuters_source = get_world_business_news()
     print("  NHK 関税・地政学リスクニュースを取得中...")
     nhk_risk_news = get_nhk_risk_news()
 
@@ -2673,6 +2699,7 @@ def main():
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
     body    = build_email_body(stock_data, wti, world_news, edinet_data, screened,
                                nikkei=nikkei, sectors=sectors, reuters_news=reuters_news,
+                               reuters_source=reuters_source,
                                nhk_risk_news=nhk_risk_news,
                                buffett_analysis=buffett_analysis)
 
