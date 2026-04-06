@@ -734,6 +734,27 @@ def _calc_health_score(f: dict) -> int:
     return score
 
 
+def _extract_bs_value(tables, *keywords: str) -> float | None:
+    """BS テーブルの行ラベル（最初のセル）でキーワードを探し、最新期の値（2列目）を返す。
+    複数キーワードはいずれか一致で OK。"""
+    for table in tables:
+        for row in table.find_all("tr"):
+            cells = row.find_all(["th", "td"])
+            if len(cells) < 2:
+                continue
+            label = cells[0].get_text(strip=True)
+            if any(kw == label for kw in keywords):
+                for i in range(1, min(5, len(cells))):
+                    raw = (cells[i].get_text(strip=True)
+                           .replace(",", "").replace("－", "").replace("―", "").strip())
+                    if raw:
+                        try:
+                            return float(raw)
+                        except ValueError:
+                            continue
+    return None
+
+
 def get_financial_data(code: str) -> dict:
     """kabutan.jp の財務ページから ROE・自己資本比率・ROIC・CFパターン・来期純利益予想を取得する。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
@@ -869,11 +890,27 @@ def get_financial_data(code: str) -> dict:
             ev = mktcap_mn + _interest_debt - (cash or 0)
             ev_ebitda = round(ev / op_income, 1)
 
-        # netCashRatio（清原式近似）= (現金等残高 - 有利子負債) / 時価総額
-        # ※ edinetdb.jp正式式は (流動資産 - 負債合計) / 時価総額 だが kabutan.jpから取得不可のため近似
+        # netCashRatio（清原式）
+        # 正式: (流動資産 + 投資有価証券×0.7 - 負債合計) / 時価総額
+        # 投資有価証券取得不可の場合: (流動資産 - 負債合計) / 時価総額 ※近似
+        # BS値取得不可の場合: (現金等残高 - 有利子負債) / 時価総額 ※近似
         net_cash_ratio = None
-        if cash is not None and mktcap_mn is not None and mktcap_mn > 0:
+        net_cash_ratio_approx = False
+        all_tables = soup.find_all("table")
+        _current_assets   = _extract_bs_value(all_tables, "流動資産", "流動資産合計")
+        _invest_sec       = _extract_bs_value(all_tables, "投資有価証券")
+        _total_liabilities = _extract_bs_value(all_tables, "負債合計")
+        if _current_assets is not None and _total_liabilities is not None and mktcap_mn is not None and mktcap_mn > 0:
+            if _invest_sec is not None:
+                _net_cash = _current_assets + _invest_sec * 0.7 - _total_liabilities
+            else:
+                _net_cash = _current_assets - _total_liabilities
+                net_cash_ratio_approx = True  # 投資有価証券除く
+            net_cash_ratio = round(_net_cash / mktcap_mn, 2)
+        elif cash is not None and mktcap_mn is not None and mktcap_mn > 0:
+            # フォールバック: BS値取得不可のため現金・有利子負債で近似
             net_cash_ratio = round((cash - _interest_debt) / mktcap_mn, 2)
+            net_cash_ratio_approx = True
 
         # ヘルススコア（100点満点）
         financials_for_score = {
@@ -886,7 +923,7 @@ def get_financial_data(code: str) -> dict:
             f"    財務データ: ROE={roe} 自己資本比率={equity_ratio} ROIC={roic}% "
             f"営業利益率={op_margin}% 売上成長率={sales_growth}% CF={cf_pattern} "
             f"来期益={ni_forecast_yoy}% PEG={peg} グレアム={graham} EV/EBITDA={ev_ebitda} "
-            f"netCashRatio={net_cash_ratio} スコア={health_score}"
+            f"netCashRatio={net_cash_ratio}{'(近似)' if net_cash_ratio_approx else ''} スコア={health_score}"
         )
         return {
             "roe": roe, "equity_ratio": equity_ratio,
@@ -897,6 +934,7 @@ def get_financial_data(code: str) -> dict:
             "per": per, "pbr": pbr,
             "peg": peg, "graham": graham, "ev_ebitda": ev_ebitda,
             "net_cash_ratio": net_cash_ratio,
+            "net_cash_ratio_approx": net_cash_ratio_approx,
         }
 
     except Exception as e:
@@ -907,7 +945,7 @@ def get_financial_data(code: str) -> dict:
             "op_margin": None, "sales_growth": None, "health_score": 0,
             "per": None, "pbr": None,
             "peg": None, "graham": None, "ev_ebitda": None,
-            "net_cash_ratio": None,
+            "net_cash_ratio": None, "net_cash_ratio_approx": False,
         }
 
 
@@ -1437,7 +1475,7 @@ def _get_op_profit(code: str) -> dict:
     url = f"https://kabutan.jp/stock/finance?code={code}"
     result = {
         "op_profit": None, "pbr": None, "mktcap_mn": None,
-        "sales_growth": None, "net_cash_ratio": None,
+        "sales_growth": None, "net_cash_ratio": None, "net_cash_ratio_approx": False,
     }
     try:
         session = _get_kabutan_session()
@@ -1520,12 +1558,25 @@ def _get_op_profit(code: str) -> dict:
                             (sales_actual[0] - sales_actual[1]) / sales_actual[1] * 100, 1
                         )
 
-        # netCashRatio（清原式近似）= (現金等残高 - 有利子負債) / 時価総額
-        # ※ edinetdb.jp正式式は (流動資産 - 負債合計) / 時価総額 だが kabutan.jpから取得不可のため近似
+        # netCashRatio（清原式）
+        # 正式: (流動資産 + 投資有価証券×0.7 - 負債合計) / 時価総額
+        # 投資有価証券取得不可の場合: (流動資産 - 負債合計) / 時価総額 ※近似
+        # BS値取得不可の場合: (現金等残高 - 有利子負債) / 時価総額 ※近似
         mktcap = result["mktcap_mn"]
-        if _cash is not None and mktcap is not None and mktcap > 0:
+        _current_assets2    = _extract_bs_value(tables, "流動資産", "流動資産合計")
+        _invest_sec2        = _extract_bs_value(tables, "投資有価証券")
+        _total_liabilities2 = _extract_bs_value(tables, "負債合計")
+        if _current_assets2 is not None and _total_liabilities2 is not None and mktcap is not None and mktcap > 0:
+            if _invest_sec2 is not None:
+                _net_cash2 = _current_assets2 + _invest_sec2 * 0.7 - _total_liabilities2
+            else:
+                _net_cash2 = _current_assets2 - _total_liabilities2
+                result["net_cash_ratio_approx"] = True
+            result["net_cash_ratio"] = round(_net_cash2 / mktcap, 2)
+        elif _cash is not None and mktcap is not None and mktcap > 0:
             interest_debt_val = (_equity or 0) * (_debt_ratio or 0)
             result["net_cash_ratio"] = round((_cash - interest_debt_val) / mktcap, 2)
+            result["net_cash_ratio_approx"] = True
 
     except Exception as e:
         print(f"    [警告] {code} 営業利益取得失敗: {e}")
@@ -1606,7 +1657,8 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             pbr_screen      = fin_info["pbr"]
             mktcap_mn       = fin_info["mktcap_mn"]
             sales_growth    = fin_info["sales_growth"]
-            net_cash_ratio  = fin_info["net_cash_ratio"]
+            net_cash_ratio       = fin_info["net_cash_ratio"]
+            net_cash_ratio_approx = fin_info.get("net_cash_ratio_approx", False)
             if op_profit is not None and op_profit <= 0:
                 print(f"    [{code}] {name} 営業利益マイナス({op_profit:,.0f}百万円) → 除外")
                 continue
@@ -1631,7 +1683,8 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
                 "graham":         graham_screen,
                 "peg":            peg_screen,
                 "ev_ebitda":      ev_ebitda_screen,
-                "net_cash_ratio": net_cash_ratio,
+                "net_cash_ratio":        net_cash_ratio,
+                "net_cash_ratio_approx": net_cash_ratio_approx,
                 "volume":         volume,
                 "op_profit":      op_label,
                 "stop_loss":      round(price * 0.92, 1),
@@ -2083,7 +2136,8 @@ def build_email_body(
         ev_s   = (f"{ev_v:.1f}倍{'✓' if ev_v <= 10 else ''}"
                   if ev_v is not None else "--")
 
-        ncr_v  = f.get("net_cash_ratio")
+        ncr_v     = f.get("net_cash_ratio")
+        ncr_approx = f.get("net_cash_ratio_approx", False)
         if ncr_v is None:
             ncr_s = "--"
         elif ncr_v >= 0.3:
@@ -2092,6 +2146,8 @@ def build_email_body(
             ncr_s = f"{ncr_v:.2f}"
         else:
             ncr_s = f"{ncr_v:.2f}⚠"
+        if ncr_approx and ncr_v is not None:
+            ncr_s += "※"
 
         rows = [
             f"    {name}（{code}）  【スコア: {hs_s}】",
@@ -2118,6 +2174,7 @@ def build_email_body(
         for d in failed_items:
             lines.extend(_fmt_buffett_row(d, buffett_analysis))
             lines.append("")
+    lines.append("  ※ netCashRatio後付の「※」= 投資有価証券取得不可のため近似値")
     lines.append("")
     lines.append("=" * 52)
     lines.append("")
@@ -2228,7 +2285,8 @@ def build_email_body(
             ev_v     = s.get("ev_ebitda")
             ev_s     = (f"{ev_v:.1f}倍{'✓' if ev_v <= 10 else ''}"
                         if ev_v is not None else "--")
-            ncr_v    = s.get("net_cash_ratio")
+            ncr_v      = s.get("net_cash_ratio")
+            ncr_approx2 = s.get("net_cash_ratio_approx", False)
             if ncr_v is None:
                 ncr_s = "--"
             elif ncr_v >= 0.3:
@@ -2237,6 +2295,8 @@ def build_email_body(
                 ncr_s = f"{ncr_v:.2f}"
             else:
                 ncr_s = f"{ncr_v:.2f}⚠"
+            if ncr_approx2 and ncr_v is not None:
+                ncr_s += "※"
 
             # --- StockRadar 簡易判定 ---
             radar_pass = []
@@ -2329,6 +2389,7 @@ def build_email_body(
         lines.append("  ----")
     else:
         lines.append("  本日の条件合致銘柄はありませんでした")
+    lines.append("  ※ netCashRatio後付の「※」= 投資有価証券取得不可のため近似値（清原式: 流動資産+投資有価証券×0.7-負債合計）")
     lines.append("")
     lines.append("=" * 52)
     lines.append("")
