@@ -2498,6 +2498,23 @@ def build_email_body(
 
     lines.append("─" * 52)
     lines.append("このメールは自動送信されています。")
+
+    lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
+    lines.append("▼ 急騰事後分析（翌朝5分チェック）")
+    lines.append("  ※ 前日に急騰した銘柄があれば以下を確認")
+    lines.append("")
+    lines.append("  □ Q3進捗率は高かったか（70%以上）")
+    lines.append("  □ 保守的決算パターンがあったか")
+    lines.append("  □ ヘルスコアは70以上だったか")
+    lines.append("  □ テーマ（半導体・防衛・DC等）に入っていたか")
+    lines.append("  □ Compression形成中だったか")
+    lines.append("")
+    lines.append("  重複件数が多いほど次回の事前スコアに活用できます。")
+    lines.append("  記録推奨：日付・銘柄・急騰率・該当項目数")
+    lines.append("")
+    lines.append("=" * 52)
     return "\n".join(lines)
 
 
