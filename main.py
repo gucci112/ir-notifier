@@ -81,6 +81,24 @@ def _get_kabutan_session() -> requests.Session:
 # ============================================================
 # バフェット指標スクリーニング 閾値
 # ============================================================
+# テーマ環境指標（監視銘柄ではなく市場温度計として使用）
+THEME_INDICATORS = [
+    {"name": "安川電機",     "code": "6506", "theme": "半導体・FA",   "note": "FA・ロボット先行指標"},
+    {"name": "東京エレクトロン", "code": "8035", "theme": "半導体製造装置", "note": "半導体サイクル先行指標"},
+    {"name": "レーザーテック", "code": "6920", "theme": "半導体検査",   "note": "半導体高値圏の温度計"},
+    {"name": "商船三井",     "code": "9104", "theme": "海運",        "note": "地政学リスク・ホルムズ指標"},
+    {"name": "INPEX",       "code": "1605", "theme": "原油",        "note": "WTI連動・エネルギー指標"},
+]
+
+# テーマ環境指標（監視銘柄ではなく市場温度計として使用）
+THEME_INDICATORS = [
+    {"name": "安川電機",     "code": "6506", "theme": "半導体・FA",   "note": "FA・ロボット先行指標"},
+    {"name": "東京エレクトロン", "code": "8035", "theme": "半導体製造装置", "note": "半導体サイクル先行指標"},
+    {"name": "レーザーテック", "code": "6920", "theme": "半導体検査",   "note": "半導体高値圏の温度計"},
+    {"name": "商船三井",     "code": "9104", "theme": "海運",        "note": "地政学リスク・ホルムズ指標"},
+    {"name": "INPEX",       "code": "1605", "theme": "原油",        "note": "WTI連動・エネルギー指標"},
+]
+
 ROE_MIN          = 15.0   # ROE 15% 以上
 EQUITY_RATIO_MIN = 40.0   # 自己資本比率 40% 以上
 
@@ -2273,6 +2291,38 @@ def build_email_body(
             lines.extend(_fmt_buffett_row(d, buffett_analysis))
             lines.append("")
     lines.append("  ※ netCashRatio後付の「※」= 投資有価証券取得不可のため近似値")
+    lines.append("")
+    lines.append("=" * 52)
+    lines.append("")
+
+    # ============================================================
+    # テーマ環境指標
+    # ============================================================
+    lines.append("▼ テーマ環境指標（市場温度計）")
+    lines.append("")
+    for ti in THEME_INDICATORS:
+        try:
+            import yfinance as yf
+            code = ti["code"]
+            suffix = ".T" if not code.endswith(".T") else ""
+            tk = yf.Ticker(f"{code}{suffix}")
+            fi = tk.fast_info
+            cur  = fi.get("last_price") or fi.get("lastPrice")
+            prev = fi.get("previous_close") or fi.get("previousClose")
+            if cur and prev:
+                chg     = cur - prev
+                chg_pct = chg / prev * 100
+                sign    = "+" if chg >= 0 else ""
+                arrow   = "↑" if chg >= 0 else "↓"
+                lines.append(
+                    f"  {arrow} {ti['name']}（{ti['code']}）"
+                    f"  ¥{cur:,.0f}  {sign}{chg_pct:.1f}%"
+                    f"  [{ti['theme']}] {ti['note']}"
+                )
+            else:
+                lines.append(f"  {ti['name']}（{ti['code']}）  取得失敗  [{ti['theme']}]")
+        except Exception as e:
+            lines.append(f"  {ti['name']}（{ti['code']}）  エラー  [{ti['theme']}]")
     lines.append("")
     lines.append("=" * 52)
     lines.append("")
