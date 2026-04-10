@@ -2097,6 +2097,28 @@ def build_email_body(
         lines.append(f"    {macd_s}  {bb_s}  {cr_s}")
         lines.append(f"    流動性:{liq_s}")
         lines.append(f"    → {sig_str}")
+
+        # 2段階エントリー計画（予算枠100万円）
+        BUDGET = 1_000_000
+        cur_price = price.get("price")
+        if cur_price and cur_price > 0:
+            # 第1段階：予算の40%・打診買い
+            budget1 = BUDGET * 0.4
+            shares1 = max(1, int(budget1 / (cur_price * 100))) * 100
+            cost1   = shares1 * cur_price
+            stop1   = round(cur_price * 0.92)
+            # 第2段階：予算の40%・本玉
+            budget2 = BUDGET * 0.4
+            price2_est = round(cur_price * 1.05)  # +5%想定
+            shares2 = max(1, int(budget2 / (price2_est * 100))) * 100
+            cost2   = shares2 * price2_est
+            target  = round(cur_price * 1.25)
+            lines.append(f"    【2段階エントリー計画（予算¥{BUDGET:,}）】")
+            lines.append(f"    第1段階（打診）: {shares1}株 × ¥{cur_price:,.0f} = ¥{cost1:,.0f}")
+            lines.append(f"      逆指値: ¥{stop1:,}（-8%）  予算比: {cost1/BUDGET*100:.0f}%")
+            lines.append(f"    第2段階（本玉）: {shares2}株 × ¥{price2_est:,}（+5%想定）= ¥{cost2:,.0f}")
+            lines.append(f"      条件: 含み益+5%超 or 次回決算確認後")
+            lines.append(f"    利確目標: ¥{target:,}（+25%）  合計上限: ¥{cost1+cost2:,.0f}（{(cost1+cost2)/BUDGET*100:.0f}%）")
         lines.append("")
     lines.append("=" * 52)
     lines.append("")
