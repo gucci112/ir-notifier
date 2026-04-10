@@ -2182,6 +2182,43 @@ def build_email_body(
             f"      売上成長率:{sg_s}  CFパターン:{cf_s}  来期純利益予想:{yoy_s}",
             f"      PEG:{peg_s}  グレアム:{gs_s}  EV/EBITDA:{ev_s}  netCashRatio:{ncr_s}",
         ]
+        # EPS×PER 目標株価計算
+        per_v = f.get("per")
+        ni_yoy = f.get("ni_forecast_yoy")
+        current_price = None
+        # stock_dataから現在株価を取得試行
+        try:
+            for _item in stock_data:
+                if _item["stock"]["code"] == code:
+                    current_price = _item["price"].get("price")
+                    break
+        except Exception:
+            pass
+
+        if per_v and current_price:
+            eps_est = current_price / per_v  # 現在EPS推定
+            # 来期EPS推定（ni_forecast_yoyがあれば成長率を加味）
+            if ni_yoy is not None:
+                eps_next = eps_est * (1 + ni_yoy / 100)
+            else:
+                eps_next = eps_est
+            # PER別目標株価
+            target_low  = round(eps_next * 15)   # 保守PER15倍
+            target_mid  = round(eps_next * per_v) # 現在PER維持
+            target_high = round(eps_next * min(per_v * 1.2, 25))  # PER拡張
+            rows.append(
+                f"      📈 目標株価試算（来期EPS≈{eps_next:.0f}円）:"
+            )
+            rows.append(
+                f"         PER15倍→¥{target_low:,}  "
+                f"現在PER{per_v:.0f}倍→¥{target_mid:,}  "
+                f"PER拡張→¥{target_high:,}"
+            )
+            # 損切りライン（現在株価の-8%）
+            if current_price:
+                stop_loss = round(current_price * 0.92)
+                rows.append(f"         損切ライン(-8%)→¥{stop_loss:,}")
+
         if bf_analysis and code in bf_analysis:
             ba = bf_analysis[code]
             rows.append(f"      🧓 Buffett視点: {ba.get('verdict', '--')}")
