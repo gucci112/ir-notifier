@@ -2546,11 +2546,45 @@ def build_email_body(
     section_label = f"▼ 世界情勢ニュース（{reuters_source}）" if reuters_source else "▼ 世界情勢ニュース"
     lines.append(section_label)
     if reuters_news:
-        for n in reuters_news:
-            lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}  {n['title']}")
-            if n["url"]:
-                lines.append(f"  {n['url']}")
-            lines.append("")
+        try:
+            import anthropic as _ac
+            _client = _ac.Anthropic()
+            _titles = "\n".join([
+                f"{i+1}. {n['title']} ({n['pub_date'][:10] if n['pub_date'] else '-'})"
+                for i, n in enumerate(reuters_news)
+            ])
+            _prompt = (
+                "以下のニュース見出しから、日本株の株価に影響しそうなものだけを選び、"
+                "各記事を1〜2行の日本語で要約してください。\n"
+                "関係ないものは除外してください。\n"
+                "形式: [番号] 要約文\n\n" + _titles
+            )
+            _resp = _client.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=800,
+                messages=[{"role": "user", "content": _prompt}]
+            )
+            _summary = _resp.content[0].text.strip()
+            _summary_lines = [l for l in _summary.split("\n") if l.strip()]
+            import re as _re
+            for _sl in _summary_lines:
+                _m = _re.match(r"\[(\d+)\]", _sl)
+                if _m:
+                    _idx = int(_m.group(1)) - 1
+                    if 0 <= _idx < len(reuters_news):
+                        _n = reuters_news[_idx]
+                        lines.append(f"  {_sl}")
+                        if _n["url"]:
+                            lines.append(f"  {_n['url']}")
+                        lines.append("")
+                else:
+                    lines.append(f"  {_sl}")
+        except Exception:
+            for n in reuters_news:
+                lines.append(f"  {n['pub_date'][:16] if n['pub_date'] else '-'}  {n['title']}")
+                if n["url"]:
+                    lines.append(f"  {n['url']}")
+                lines.append("")
     else:
         lines.append("  ニュースを取得できませんでした")
         lines.append("")
