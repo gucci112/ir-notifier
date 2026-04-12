@@ -1406,6 +1406,57 @@ def get_stock_price(code: str) -> dict:
 # ============================================================
 # WTI 原油先物価格取得（Yahoo Finance API）
 # ============================================================
+def get_corporate_actions(stocks: list) -> dict:
+    """EDINET DB APIからコーポレートアクション情報を取得する"""
+    import os, requests
+    api_key = os.environ.get("EDINETDB_API_KEY", "")
+    if not api_key:
+        return {}
+    result = {}
+    for stock in stocks:
+        code = stock["code"]
+        try:
+            # 企業検索でEDINETコードを取得
+            r = requests.get(
+                f"https://edinetdb.jp/v1/search?q={code}",
+                headers={"X-API-Key": api_key},
+                timeout=10
+            )
+            if not r.ok:
+                continue
+            data = r.json().get("data", [])
+            if not data:
+                continue
+            edinet_code = data[0].get("edinetCode") or data[0].get("edinet_code")
+            if not edinet_code:
+                continue
+            # 大株主・増資情報を取得
+            r2 = requests.get(
+                f"https://edinetdb.jp/v1/companies/{edinet_code}",
+                headers={"X-API-Key": api_key},
+                timeout=10
+            )
+            if not r2.ok:
+                continue
+            company = r2.json().get("data", {})
+            actions = []
+            # 最新決算からPO・自社株買い情報を確認
+            latest = company.get("latestFinancials") or {}
+            if latest.get("treasuryStockAcquisition"):
+                actions.append("自社株買い実施中")
+            # 健全性スコア
+            health = company.get("healthScore")
+            if health:
+                actions.append(f"健全性スコア: {health}/100")
+            result[code] = {
+                "edinet_code": edinet_code,
+                "actions": actions,
+                "health_score": health,
+            }
+        except Exception:
+            continue
+    return result
+
 def get_wti_price() -> dict:
     """WTI 原油先物（CL=F）の直近価格を取得する"""
     try:
@@ -1987,6 +2038,7 @@ def build_email_body(
     reuters_source: str = "",
     nhk_risk_news: list | None = None,
     buffett_analysis: dict | None = None,
+    corp_actions: dict | None = None,
 ) -> str:
     today = date.today().strftime("%Y年%m月%d日")
     lines = [
@@ -2275,6 +2327,12 @@ def build_email_body(
             rows.append(f"      🧓 Buffett視点: {ba.get('verdict', '--')}")
             if ba.get("comment"):
                 rows.append(f"      → {ba['comment']}")
+        # コーポレートアクション情報
+        if corp_actions and code in corp_actions:
+            ca = corp_actions[code]
+            if ca.get("actions"):
+                for act in ca["actions"]:
+                    rows.append(f"      🏢 {act}")
         return rows
 
     passed_items = [d for d in stock_data if d.get("buffett_passed")]
@@ -2866,6 +2924,14 @@ def main():
     screened = get_screened_stocks()
     print(f"  スクリーニング結果: {len(screened)}件")
 
+    # コーポレートアクション取得
+    print("  コーポレートアクション情報を取得中...")
+    try:
+        corp_actions = get_corporate_actions(STOCKS)
+    except Exception as e:
+        print(f"  コーポレートアクション取得失敗: {e}")
+        corp_actions = {}
+
     # メール組み立て・送信
     today   = date.today().strftime("%Y/%m/%d")
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
@@ -2873,7 +2939,8 @@ def main():
                                nikkei=nikkei, sectors=sectors, reuters_news=reuters_news,
                                reuters_source=reuters_source,
                                nhk_risk_news=nhk_risk_news,
-                               buffett_analysis=buffett_analysis)
+                               buffett_analysis=buffett_analysis,
+                               corp_actions=corp_actions)
 
     print("メールを送信中...")
     send_email(subject, body)
