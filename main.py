@@ -2305,10 +2305,10 @@ def build_email_body(
             code = ti["code"]
             suffix = ".T" if not code.endswith(".T") else ""
             tk = yf.Ticker(f"{code}{suffix}")
-            fi = tk.fast_info
-            cur  = fi.get("last_price") or fi.get("lastPrice")
-            prev = fi.get("previous_close") or fi.get("previousClose")
-            if cur and prev:
+            hist = tk.history(period="2d")
+            if len(hist) >= 2:
+                cur  = hist["Close"].iloc[-1]
+                prev = hist["Close"].iloc[-2]
                 chg     = cur - prev
                 chg_pct = chg / prev * 100
                 sign    = "+" if chg >= 0 else ""
