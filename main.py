@@ -33,7 +33,6 @@ ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")  # Claude API キ�
 # ============================================================
 STOCKS = [
     {"name": "ジャパンマテリアル", "code": "6055", "next_earnings": "2026-05-13", "earnings_note": "本決算"},
-    {"name": "坪田ラボ",           "code": "4890", "next_earnings": None,         "earnings_note": ""},
     {"name": "エクシオグループ",   "code": "1951", "next_earnings": None,         "earnings_note": ""},
     {"name": "ダイダン",           "code": "1980", "next_earnings": None,         "earnings_note": ""},
     {"name": "キオクシア",         "code": "285A", "next_earnings": None,         "earnings_note": ""},
