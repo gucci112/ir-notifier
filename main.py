@@ -2134,8 +2134,9 @@ def build_email_body(
         else:
             price_str = "取得できませんでした"
 
-        hs   = item.get("score", 0) or 0
-        rank = "S" if hs>=45 else "A" if hs>=35 else "B" if hs>=25 else "C"
+        hs   = (item.get("buffett") or {}).get("health_score", 0) or 0
+        sel  = item.get("score", 0) or 0
+        rank = "S" if sel>=45 else "A" if sel>=35 else "B" if sel>=25 else "C"
 
         if wti_price > 100:  entry_judge = "🔴 エントリー停止"
         elif wti_price > 90: entry_judge = "🟡 様子見"
