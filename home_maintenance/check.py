@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 import urllib.request
 import urllib.error
+import resend as resend_lib
 
 # ── パス設定 ──────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
@@ -223,30 +224,18 @@ def send_email(subject: str, html_body: str) -> bool:
         print("ERROR: RESEND_API_KEY または NOTIFY_EMAIL が未設定")
         return False
 
-    payload = json.dumps({
-        "from": FROM_EMAIL,
-        "to": [NOTIFY_EMAIL],
-        "subject": subject,
-        "html": html_body,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
+    resend_lib.api_key = RESEND_API_KEY
     try:
-        with urllib.request.urlopen(req) as res:
-            result = json.loads(res.read())
-            print(f"メール送信成功: {result.get('id')}")
-            return True
-    except urllib.error.HTTPError as e:
-        print(f"メール送信失敗: {e.code} {e.read().decode()}")
+        resend_lib.Emails.send({
+            "from":    "onboarding@resend.dev",
+            "to":      NOTIFY_EMAIL,
+            "subject": subject,
+            "html":    html_body,
+        })
+        print("メール送信成功")
+        return True
+    except Exception as e:
+        print(f"メール送信失敗: {e}")
         return False
 
 
