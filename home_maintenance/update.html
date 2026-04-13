@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>交換記録 - ホームメンテナンス</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', sans-serif;
+    background: #f0f2f5;
+    min-height: 100vh;
+    padding: 20px 16px;
+    color: #1a1a1a;
+  }
+  .container { max-width: 560px; margin: 0 auto; }
+
+  .header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+  .header .icon { font-size: 36px; margin-bottom: 8px; }
+  .header h1 { font-size: 20px; font-weight: 700; color: #2d3748; }
+  .header p { font-size: 13px; color: #888; margin-top: 4px; }
+
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+
+  .card-header {
+    background: #2d3748;
+    color: #fff;
+    padding: 14px 20px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .card-body { padding: 20px; }
+
+  .form-group { margin-bottom: 16px; }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #4a5568;
+    margin-bottom: 6px;
+  }
+  select, input[type="date"], input[type="text"], textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 15px;
+    font-family: inherit;
+    color: #1a1a1a;
+    background: #fff;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  select:focus, input:focus, textarea:focus {
+    outline: none;
+    border-color: #4a5568;
+    box-shadow: 0 0 0 3px rgba(74,85,104,0.1);
+  }
+  textarea { height: 80px; resize: vertical; }
+
+  .item-info {
+    background: #f7fafc;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .item-info.show { display: block; }
+  .item-info .info-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #4a5568;
+    margin-bottom: 4px;
+  }
+  .item-info .info-row:last-child { margin-bottom: 0; }
+  .item-info .info-label { color: #888; }
+
+  .btn {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.2s;
+  }
+  .btn:active { opacity: 0.8; }
+  .btn-primary { background: #2d3748; color: #fff; }
+  .btn-success { background: #38a169; color: #fff; }
+  .btn-disabled { background: #e2e8f0; color: #a0aec0; cursor: not-allowed; }
+
+  .status-badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge-alert { background: #e53e3e; color: #fff; }
+  .badge-warn  { background: #d69e2e; color: #fff; }
+  .badge-today { background: #3182ce; color: #fff; }
+  .badge-soon  { background: #805ad5; color: #fff; }
+  .badge-ok    { background: #38a169; color: #fff; }
+
+  .all-items { margin-top: 8px; }
+  .item-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #f0f0f0;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .item-row:last-child { border-bottom: none; }
+  .item-name { font-size: 14px; font-weight: 600; color: #2d3748; }
+  .item-date { font-size: 12px; color: #888; margin-top: 2px; }
+
+  .message {
+    padding: 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    margin-top: 12px;
+    display: none;
+  }
+  .message.show { display: block; }
+  .message.success { background: #f0fff4; color: #276749; border: 1px solid #9ae6b4; }
+  .message.error   { background: #fff5f5; color: #c53030; border: 1px solid #fc8181; }
+
+  .github-note {
+    font-size: 12px;
+    color: #888;
+    text-align: center;
+    margin-top: 12px;
+    line-height: 1.6;
+  }
+  .github-note a { color: #4a5568; }
+
+  .spinner {
+    display: none;
+    text-align: center;
+    padding: 8px;
+    font-size: 13px;
+    color: #888;
+  }
+  .spinner.show { display: block; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <div class="header">
+    <div class="icon">🏠</div>
+    <h1>交換記録</h1>
+    <p>ホームメンテナンス管理</p>
+  </div>
+
+  <!-- 全品目状況カード -->
+  <div class="card">
+    <div class="card-header">📋 全品目の状況</div>
+    <div class="card-body">
+      <div id="all-items-list" class="all-items">
+        <div style="text-align:center;color:#888;font-size:14px;padding:20px 0;">読み込み中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 交換記録フォームカード -->
+  <div class="card">
+    <div class="card-header">✏️ 交換を記録する</div>
+    <div class="card-body">
+
+      <div class="form-group">
+        <label for="item-select">品目</label>
+        <select id="item-select" onchange="onItemChange()">
+          <option value="">-- 品目を選んでください --</option>
+        </select>
+      </div>
+
+      <div id="item-info" class="item-info">
+        <div class="info-row">
+          <span class="info-label">最終交換日</span>
+          <span id="info-last"></span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">次回予定</span>
+          <span id="info-next"></span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">交換間隔</span>
+          <span id="info-interval"></span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="replace-date">交換日</label>
+        <input type="date" id="replace-date">
+      </div>
+
+      <div class="form-group">
+        <label for="memo">メモ（任意）</label>
+        <textarea id="memo" placeholder="例：フィルター品番 XXX に変更"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="github-token">GitHub Personal Access Token</label>
+        <input type="text" id="github-token" placeholder="ghp_xxxxxxxxxxxx" autocomplete="off">
+        <div style="font-size:11px;color:#aaa;margin-top:4px;">ブラウザには保存されません。毎回入力が必要です。</div>
+      </div>
+
+      <button class="btn btn-primary" id="submit-btn" onclick="submitRecord()">
+        💾 記録を保存する
+      </button>
+
+      <div class="spinner" id="spinner">保存中...</div>
+      <div class="message" id="message"></div>
+
+      <div class="github-note">
+        GitHub API を使って <code>history.json</code> を直接更新します。<br>
+        PAT には <strong>repo スコープ</strong> が必要です。
+        <a href="https://github.com/settings/tokens/new" target="_blank">トークンを発行する →</a>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── 設定 ────────────────────────────────────────────────
+const GITHUB_OWNER = "gucci112";          // ← あなたのGitHubユーザー名
+const GITHUB_REPO  = "ir-notifier";       // ← リポジトリ名
+const ITEMS_PATH   = "home_maintenance/items.json";
+const HISTORY_PATH = "home_maintenance/history.json";
+const BRANCH       = "main";
+
+// ── データキャッシュ ─────────────────────────────────────
+let itemsData   = [];
+let historyData = {};
+
+// ── 初期化 ──────────────────────────────────────────────
+window.addEventListener("DOMContentLoaded", async () => {
+  // 今日の日付をデフォルトに
+  document.getElementById("replace-date").value = todayStr();
+
+  // URLパラメータで品目をプリセット
+  const params = new URLSearchParams(location.search);
+  const presetId = params.get("id");
+
+  await loadData(presetId);
+});
+
+function todayStr() {
+  return new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+}
+
+async function fetchGitHubFile(path) {
+  const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${path}?ref=${BRANCH}`;
+  const res = await fetch(url, {
+    headers: { Accept: "application/vnd.github.v3+json" }
+  });
+  if (!res.ok) throw new Error(`GitHub取得エラー: ${path} (${res.status})`);
+  const data = await res.json();
+  return {
+    content: JSON.parse(atob(data.content.replace(/\n/g, ""))),
+    sha: data.sha,
+  };
+}
+
+async function loadData(presetId) {
+  try {
+    const [itemsResult, historyResult] = await Promise.all([
+      fetchGitHubFile(ITEMS_PATH),
+      fetchGitHubFile(HISTORY_PATH),
+    ]);
+
+    itemsData   = itemsResult.content;
+    historyData = historyResult.content;
+
+    renderAllItems();
+    populateSelect(presetId);
+
+  } catch (e) {
+    document.getElementById("all-items-list").innerHTML =
+      `<div style="color:#e53e3e;font-size:13px;">データ読み込みエラー: ${e.message}</div>`;
+  }
+}
+
+function daysDiff(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  const today = new Date(todayStr());
+  return Math.round((d - today) / 86400000);
+}
+
+function statusInfo(diff) {
+  if (diff === null) return { cls: "badge-alert", label: "未設定" };
+  if (diff < -60) return { cls: "badge-alert", label: `🔴 ${-diff}日超過` };
+  if (diff < 0)   return { cls: "badge-warn",  label: `🟡 ${-diff}日超過` };
+  if (diff === 0) return { cls: "badge-today", label: "📅 本日" };
+  if (diff <= 7)  return { cls: "badge-soon",  label: `⏰ あと${diff}日` };
+  return { cls: "badge-ok", label: `✅ あと${diff}日` };
+}
+
+function renderAllItems() {
+  const list = document.getElementById("all-items-list");
+  const today = new Date(todayStr());
+
+  // 次回日付でソート（早い順）
+  const sorted = itemsData.map(item => {
+    const hist = historyData[item.id] || {};
+    const last = hist.last_replaced || "";
+    let nextDate = null;
+    let diff = null;
+    if (last) {
+      const d = new Date(last);
+      d.setDate(d.getDate() + item.interval_days);
+      nextDate = d.toLocaleDateString("sv-SE");
+      diff = Math.round((d - today) / 86400000);
+    }
+    return { item, last, nextDate, diff };
+  }).sort((a, b) => {
+    if (a.diff === null) return -1;
+    if (b.diff === null) return 1;
+    return a.diff - b.diff;
+  });
+
+  list.innerHTML = sorted.map(({ item, last, nextDate, diff }) => {
+    const si = statusInfo(diff);
+    return `
+      <div class="item-row">
+        <div>
+          <div class="item-name">${item.name}</div>
+          <div class="item-date">最終: ${last || "未設定"} ／ 次回: ${nextDate || "未設定"}</div>
+        </div>
+        <span class="status-badge ${si.cls}">${si.label}</span>
+      </div>`;
+  }).join("");
+}
+
+function populateSelect(presetId) {
+  const sel = document.getElementById("item-select");
+  itemsData.forEach(item => {
+    const opt = document.createElement("option");
+    opt.value = item.id;
+    opt.textContent = item.name;
+    sel.appendChild(opt);
+  });
+  if (presetId) {
+    sel.value = presetId;
+    onItemChange();
+  }
+}
+
+function onItemChange() {
+  const id   = document.getElementById("item-select").value;
+  const info = document.getElementById("item-info");
+
+  if (!id) { info.classList.remove("show"); return; }
+
+  const item = itemsData.find(i => i.id === id);
+  const hist = historyData[id] || {};
+  const last = hist.last_replaced || "未設定";
+
+  let next = "未設定";
+  if (hist.last_replaced) {
+    const d = new Date(hist.last_replaced);
+    d.setDate(d.getDate() + item.interval_days);
+    next = d.toLocaleDateString("sv-SE");
+  }
+
+  document.getElementById("info-last").textContent     = last;
+  document.getElementById("info-next").textContent     = next;
+  document.getElementById("info-interval").textContent = `${item.interval_days}日ごと（${item.note || ""}）`;
+  document.getElementById("memo").value = hist.memo || "";
+  info.classList.add("show");
+}
+
+async function submitRecord() {
+  const id    = document.getElementById("item-select").value;
+  const repDate = document.getElementById("replace-date").value;
+  const memo  = document.getElementById("memo").value.trim();
+  const token = document.getElementById("github-token").value.trim();
+
+  if (!id)      { showMsg("error", "品目を選択してください"); return; }
+  if (!repDate) { showMsg("error", "交換日を入力してください"); return; }
+  if (!token)   { showMsg("error", "GitHub Personal Access Token を入力してください"); return; }
+
+  setLoading(true);
+
+  try {
+    // 最新のhistory.jsonを取得（SHA必要）
+    const url = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${HISTORY_PATH}?ref=${BRANCH}`;
+    const getRes = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github.v3+json",
+      }
+    });
+    if (!getRes.ok) throw new Error(`取得失敗: ${getRes.status}`);
+    const fileData = await getRes.json();
+    const sha = fileData.sha;
+    const currentHistory = JSON.parse(atob(fileData.content.replace(/\n/g, "")));
+
+    // 更新
+    currentHistory[id] = {
+      last_replaced: repDate,
+      memo: memo,
+    };
+
+    const newContent = btoa(unescape(encodeURIComponent(
+      JSON.stringify(currentHistory, null, 2) + "\n"
+    )));
+
+    const item = itemsData.find(i => i.id === id);
+    const putRes = await fetch(url, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message: `🏠 [home-maintenance] ${item.name} 交換記録: ${repDate}`,
+        content: newContent,
+        sha: sha,
+        branch: BRANCH,
+      }),
+    });
+
+    if (!putRes.ok) {
+      const err = await putRes.json();
+      throw new Error(err.message || `保存失敗: ${putRes.status}`);
+    }
+
+    // ローカルキャッシュも更新
+    historyData[id] = { last_replaced: repDate, memo };
+    renderAllItems();
+
+    showMsg("success", `✅ 「${item.name}」の交換記録を保存しました（${repDate}）`);
+    document.getElementById("item-select").value = "";
+    document.getElementById("item-info").classList.remove("show");
+    document.getElementById("memo").value = "";
+
+  } catch (e) {
+    showMsg("error", `エラー: ${e.message}`);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function setLoading(on) {
+  document.getElementById("spinner").classList.toggle("show", on);
+  document.getElementById("submit-btn").disabled = on;
+  document.getElementById("submit-btn").className = "btn " + (on ? "btn-disabled" : "btn-primary");
+}
+
+function showMsg(type, text) {
+  const el = document.getElementById("message");
+  el.className = `message ${type} show`;
+  el.textContent = text;
+  el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+</script>
+
+</body>
+</html>

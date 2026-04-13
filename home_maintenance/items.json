@@ -1,0 +1,47 @@
+[
+  {
+    "id": "water_filter",
+    "name": "ウォーターサーバーフィルター",
+    "interval_days": 180,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "6ヶ月ごと交換"
+  },
+  {
+    "id": "shower_head",
+    "name": "シャワーヘッド除菌フィルター",
+    "interval_days": 90,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "3ヶ月ごと交換"
+  },
+  {
+    "id": "ac_filter",
+    "name": "エアコンフィルター",
+    "interval_days": 30,
+    "notify_before_days": 7,
+    "warn_days": 14,
+    "alert_days": 30,
+    "note": "月1回清掃"
+  },
+  {
+    "id": "range_hood_filter",
+    "name": "レンジフードフィルター",
+    "interval_days": 90,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "3ヶ月ごと交換"
+  },
+  {
+    "id": "bath_filter",
+    "name": "浴室循環フィルター",
+    "interval_days": 180,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "半年ごと交換"
+  }
+]

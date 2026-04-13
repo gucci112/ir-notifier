@@ -1,0 +1,22 @@
+{
+  "water_filter": {
+    "last_replaced": "2026-01-15",
+    "memo": ""
+  },
+  "shower_head": {
+    "last_replaced": "2026-02-01",
+    "memo": ""
+  },
+  "ac_filter": {
+    "last_replaced": "2026-03-20",
+    "memo": ""
+  },
+  "range_hood_filter": {
+    "last_replaced": "2026-01-10",
+    "memo": ""
+  },
+  "bath_filter": {
+    "last_replaced": "2025-10-01",
+    "memo": ""
+  }
+}

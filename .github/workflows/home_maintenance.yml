@@ -1,0 +1,33 @@
+name: Home Maintenance Check
+
+on:
+  schedule:
+    # 毎朝 JST 7:00 (UTC 22:00 前日)
+    - cron: '0 22 * * *'
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run maintenance check
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL:   ${{ secrets.NOTIFY_EMAIL }}
+          FROM_EMAIL:     ${{ secrets.FROM_EMAIL }}
+          GITHUB_OWNER:   ${{ github.repository_owner }}
+          GITHUB_REPO:    ${{ github.event.repository.name }}
+          PAGES_URL:      ${{ secrets.MAINTENANCE_PAGES_URL }}
+        run: |
+          python home_maintenance/check.py
