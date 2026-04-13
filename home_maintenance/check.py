@@ -22,7 +22,7 @@ HISTORY_FILE = BASE_DIR / "history.json"
 # ── 環境変数 ──────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 NOTIFY_EMAIL   = os.environ.get("NOTIFY_EMAIL", "")
-FROM_EMAIL     = os.environ.get("FROM_EMAIL", "home@resend.dev")
+FROM_EMAIL     = os.environ.get("FROM_EMAIL", "")
 GITHUB_OWNER   = os.environ.get("GITHUB_OWNER", "")
 GITHUB_REPO    = os.environ.get("GITHUB_REPO", "ir-notifier")
 PAGES_URL      = os.environ.get("PAGES_URL", "")  # GitHub PagesのURL
