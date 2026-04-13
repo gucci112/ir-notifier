@@ -20,6 +20,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install dependencies
+        run: pip install resend
+
       - name: Run maintenance check
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
