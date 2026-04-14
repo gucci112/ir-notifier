@@ -30,7 +30,7 @@
     "id": "balcony_water",
     "name": "ベランダ貯蓄水",
     "interval_days": 90,
-    "notify_before_days": 50,
+    "notify_before_days": 7,
     "warn_days": 30,
     "alert_days": 60,
     "note": "3ヶ月ごと交換"
