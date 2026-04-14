@@ -2,5 +2,17 @@
   "server_filter": {
     "last_replaced": "2026-04-12",
     "memo": ""
+  },
+  "shower_head": {
+    "last_replaced": "2025-12-03",
+    "memo": ""
+  },
+  "auto_server": {
+    "last_replaced": "2025-12-01",
+    "memo": ""
+  },
+  "balcony_water": {
+    "last_replaced": "2026-02-23",
+    "memo": ""
   }
 }

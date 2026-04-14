@@ -7,5 +7,32 @@
     "warn_days": 30,
     "alert_days": 60,
     "note": "10ヶ月ごと交換"
+  },
+  {
+    "id": "shower_head",
+    "name": "シャワーヘッド（ゼッケン）",
+    "interval_days": 183,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "6ヶ月ごと交換"
+  },
+  {
+    "id": "auto_server",
+    "name": "オートマチックサーバー（エコウォーター）",
+    "interval_days": 183,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "6ヶ月ごと交換"
+  },
+  {
+    "id": "balcony_water",
+    "name": "ベランダ貯蓄水",
+    "interval_days": 90,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "3ヶ月ごと交換"
   }
 ]
