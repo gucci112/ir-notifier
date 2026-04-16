@@ -3,7 +3,7 @@ name: IR・WTI 毎朝通知
 on:
   # 毎朝 6:00 JST（= UTC 21:00）に自動実行（GitHub遅延考慮で7-8時着予定）
   schedule:
-    - cron: '0 21 * * *'
+    - cron: '0 20 * * *'
   # 「手動でいますぐ実行」ボタンも有効化
   workflow_dispatch:
 
