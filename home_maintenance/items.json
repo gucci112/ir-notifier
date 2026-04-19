@@ -34,5 +34,23 @@
     "warn_days": 30,
     "alert_days": 60,
     "note": "3ヶ月ごと交換"
+  },
+  {
+    "id": "aquarium_water",
+    "name": "熱帯魚水槽 水交換",
+    "interval_days": 30,
+    "notify_before_days": 7,
+    "warn_days": 14,
+    "alert_days": 30,
+    "note": "1ヶ月ごと交換"
+  },
+  {
+    "id": "aquarium_filter",
+    "name": "熱帯魚水槽 フィルター清掃",
+    "interval_days": 183,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "6ヶ月ごと清掃"
   }
 ]
