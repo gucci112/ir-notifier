@@ -103,6 +103,55 @@ EQUITY_RATIO_MIN = 40.0   # 自己資本比率 40% 以上
 
 
 # ============================================================
+# 株探 → 決算発表予定日の自動取得
+# ============================================================
+def get_earnings_date_from_kabutan(code: str) -> str | None:
+    """株探の銘柄ページから決算発表予定日を自動取得する。
+    返り値: "YYYY-MM-DD" 形式 or None
+    """
+    url = f"https://kabutan.jp/stock/?code={code}"
+    try:
+        session = _get_kabutan_session()
+        resp = session.get(url, headers={"Referer": "https://kabutan.jp/"}, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        text = soup.get_text()
+
+        # 「決算発表予定日」の直後にある YYYY/MM/DD を探す
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            if "決算発表予定日" in line:
+                # 同じ行または次の数行から日付を探す
+                search_range = lines[i:i+5]
+                for l in search_range:
+                    import re as _re
+                    m = _re.search(r'(202\d)[/年](\d{1,2})[/月](\d{1,2})', l)
+                    if m:
+                        y, mo, d = m.group(1), m.group(2).zfill(2), m.group(3).zfill(2)
+                        return f"{y}-{mo}-{d}"
+    except Exception as e:
+        print(f"    [警告] {code} 決算日取得失敗: {e}")
+    return None
+
+
+def fetch_all_earnings_dates(stocks: list) -> dict:
+    """全監視銘柄の決算発表予定日を株探から取得する。
+    手動設定済みの場合はそちらを優先しない（常に最新を取得）。
+    返り値: {code: "YYYY-MM-DD" or None}
+    """
+    result = {}
+    for stock in stocks:
+        code = stock["code"]
+        date_str = get_earnings_date_from_kabutan(code)
+        result[code] = date_str
+        if date_str:
+            print(f"    [{code}] 決算発表予定日: {date_str}")
+        else:
+            print(f"    [{code}] 決算発表予定日: 取得できませんでした")
+    return result
+
+
+# ============================================================
 # EDINET v2 API → 四半期報告書の決算進捗
 # ============================================================
 _EDINET_BASE = "https://disclosure.edinet-fsa.go.jp/api/v2"
@@ -2494,6 +2543,14 @@ def send_email(subject: str, body: str) -> None:
 # ============================================================
 def main():
     print("=== IR通知スクリプト 開始 ===")
+
+    # 決算発表予定日を株探から自動取得してSTOCKSを更新
+    print("  決算発表予定日を株探から取得中...")
+    earnings_dates = fetch_all_earnings_dates(STOCKS)
+    for stock in STOCKS:
+        auto_date = earnings_dates.get(stock["code"])
+        if auto_date:
+            stock["next_earnings"] = auto_date  # 自動取得した日付で上書き
 
     # 各銘柄のデータ収集
     stock_data = []
