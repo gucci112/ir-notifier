@@ -2075,6 +2075,72 @@ def calc_entry_signal(stock_item: dict, wti: dict) -> dict:
 # ============================================================
 # メール本文の組み立て
 # ============================================================
+# ============================================================
+# 査読チェック（データ異常を自動検知）
+# ============================================================
+def run_data_review(stock_data: list) -> list:
+    """
+    収集したデータの異常を自動検知して警告リストを返す。
+    チェック項目：
+      1. PERが異常値（0以下・500以上）
+      2. 決算日が過去になっていないか
+      3. 株価が前日比±20%以上の異常変動
+      4. ROE・自己資本比率がNone（取得失敗）
+      5. 株価がNone（取得失敗）
+    """
+    alerts = []
+    today = date.today()
+
+    for item in stock_data:
+        stock   = item["stock"]
+        buffett = item.get("buffett", {})
+        price   = item.get("price", {})
+        code    = stock["code"]
+        name    = stock["name"]
+
+        # 1. PER異常値チェック
+        per = buffett.get("per")
+        if per is not None:
+            if per <= 0 or per > 500:
+                alerts.append(f"⚠️ [{code}]{name} PER異常値: {per}（要確認）")
+
+        # 2. 決算日が過去になっていないか
+        next_e = stock.get("next_earnings")
+        if next_e:
+            try:
+                e_date = date.fromisoformat(next_e)
+                if e_date < today:
+                    alerts.append(f"⚠️ [{code}]{name} 決算日が過去: {next_e}（更新が必要）")
+            except ValueError:
+                alerts.append(f"⚠️ [{code}]{name} 決算日フォーマット異常: {next_e}")
+
+        # 3. 株価の異常変動チェック（±20%以上）
+        if isinstance(price, dict):
+            chg_pct = price.get("change_pct")
+            if chg_pct is not None:
+                try:
+                    pct = float(chg_pct)
+                    if abs(pct) >= 20:
+                        alerts.append(f"🚨 [{code}]{name} 株価異常変動: {pct:+.1f}%（ストップ高/安の可能性）")
+                except (ValueError, TypeError):
+                    pass
+
+        # 4. ROE・自己資本比率がNone（取得失敗）
+        if buffett.get("roe") is None:
+            alerts.append(f"⚠️ [{code}]{name} ROE取得失敗（株探接続を確認）")
+        if buffett.get("equity_ratio") is None:
+            alerts.append(f"⚠️ [{code}]{name} 自己資本比率取得失敗（株探接続を確認）")
+
+        # 5. 株価がNone（取得失敗）
+        if isinstance(price, dict):
+            if price.get("price") is None:
+                alerts.append(f"⚠️ [{code}]{name} 株価取得失敗（要確認）")
+        elif price is None:
+            alerts.append(f"⚠️ [{code}]{name} 株価取得失敗（要確認）")
+
+    return alerts
+
+
 def build_email_body(
     stock_data: list,
     wti: dict,
@@ -2114,6 +2180,22 @@ def build_email_body(
         "=" * 52,
         "",
     ]
+
+    # 【査読アラート】データ異常チェック
+    review_alerts = run_data_review(stock_data)
+    if review_alerts:
+        lines.append("【査読アラート】⚠️ データ異常を検知しました")
+        lines.append("-" * 52)
+        for alert in review_alerts:
+            lines.append(f"  {alert}")
+        lines.append("")
+        lines.append("  ※ 上記銘柄のデータを手動で確認してください")
+        lines.append("=" * 52)
+        lines.append("")
+    else:
+        lines.append("【査読】✅ 全銘柄データ正常")
+        lines.append("=" * 52)
+        lines.append("")
 
     # 【1】今日の結論
     lines.append("【1】今日の結論")
