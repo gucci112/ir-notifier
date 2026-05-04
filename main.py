@@ -2222,8 +2222,41 @@ def build_email_body(
             lines.append("  下落業種: " + " / ".join(f"{s['name']}{s['change_pct']:+.1f}%" for s in down))
         lines.append("")
 
-    lines.append("  📊 注目銘柄トップ3")
-    ranked = sorted(stock_data, key=lambda x: -(x.get("score") or 0))
+    # 仕込みウィンドウ計算（決算3〜6週間前が仕込み時期）
+    from datetime import date as _date, timedelta as _timedelta
+    _today = _date.today()
+
+    def _calc_entry_window(next_earnings_str):
+        """決算日から仕込み開始・終了日を計算する。"""
+        if not next_earnings_str:
+            return None, None, None
+        try:
+            e_date = _date.fromisoformat(next_earnings_str)
+            days_to = (e_date - _today).days
+            window_start = e_date - _timedelta(weeks=6)
+            window_end   = e_date - _timedelta(weeks=3)
+            in_window = window_start <= _today <= window_end
+            return days_to, in_window, window_start
+        except:
+            return None, None, None
+
+    # ベスト3候補の抽出（スコア＋仕込みウィンドウを加味）
+    def _calc_total_score(d):
+        base = d.get("score") or 0
+        st = d["stock"]
+        next_e = st.get("next_earnings")
+        days_to, in_window, _ = _calc_entry_window(next_e)
+        # 仕込みウィンドウ内なら+10点ボーナス
+        if in_window:
+            base += 10
+        # 決算が近すぎる（2週間以内）は-5点
+        if days_to is not None and 0 < days_to <= 14:
+            base -= 5
+        return base
+
+    ranked = sorted(stock_data, key=lambda x: -_calc_total_score(x))
+
+    lines.append("  🏆 ベスト3候補（スコア＋仕込み時期）")
     for i, d in enumerate(ranked[:3], 1):
         st    = d["stock"]
         pr    = d.get("price", {})
@@ -2232,12 +2265,27 @@ def build_email_body(
         price_str = f"¥{pr['price']:,.0f}" if pr.get("price") else "--"
         peg_v = bf.get("peg")
         ni_v  = bf.get("ni_forecast_yoy")
+        next_e = st.get("next_earnings")
+        days_to, in_window, window_start = _calc_entry_window(next_e)
+
         parts = []
         if peg_v: parts.append(f"PEG{peg_v:.2f}{'✓' if peg_v<=1 else ''}")
         if ni_v is not None: parts.append(f"来期{ni_v:+.1f}%")
         if tags: parts.append(tags[0])
+
         lines.append(f"  {i}位 {st['code']} {st['name']}  {price_str}")
         if parts: lines.append(f"       {' / '.join(parts)}")
+
+        # 仕込み時期の表示
+        if days_to is not None and days_to > 0:
+            if in_window:
+                lines.append(f"       🟢 仕込みウィンドウ中！決算まであと{days_to}日")
+            elif days_to > 42:  # 6週間以上先
+                lines.append(f"       ⏳ 仕込み開始: {window_start.strftime('%m/%d')}〜（あと{(window_start - _today).days}日）")
+            elif days_to <= 14:
+                lines.append(f"       ⚠️ 決算直前（あと{days_to}日）様子見推奨")
+            else:
+                lines.append(f"       📅 決算まであと{days_to}日")
     lines.append("")
     lines.append("=" * 52)
     lines.append("")
