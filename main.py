@@ -2354,6 +2354,18 @@ def build_email_body(
             days_left = (ed - _date.today()).days
             if days_left >= 0:
                 lines.append(f"  📅 次回決算: {next_e}（あと{days_left}日）{(' ★'+e_note) if e_note else ''}")
+                if days_left <= 3:
+                    lines.append("  🎯 行動指針: 決算当日直前 → 逆指値・指値を最終確認")
+                elif days_left <= 7:
+                    lines.append("  🎯 行動指針: 決算直前1週間 → 新規エントリー不可・逆指値確認")
+                elif days_left <= 14:
+                    lines.append("  🎯 行動指針: 決算2週間前 → 新規見送り・既存ポジション維持")
+                elif days_left <= 21:
+                    lines.append("  🎯 行動指針: 仕込み終盤 → 逆指値設定を確認")
+                elif days_left <= 42:
+                    lines.append("  🎯 行動指針: 🟢仕込みウィンドウ → エントリー検討タイミング")
+                else:
+                    lines.append("  🎯 行動指針: ⏳今は観察期間 → 仕込みは6週間前から")
 
         peg_v = f.get("peg")
         if passed or (peg_v and peg_v <= 1):
