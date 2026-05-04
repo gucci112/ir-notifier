@@ -1307,6 +1307,25 @@ def _calc_liquidity(closes: list, volumes: list) -> dict:
     return {"avg_volume_yen": round(avg), "judge": judge, "label": label}
 
 
+
+def get_margin_ratio(code: str):
+    try:
+        session = _get_kabutan_session()
+        resp = session.get(f"https://kabutan.jp/stock/?code={code}", headers={"Referer": "https://kabutan.jp/"}, timeout=15)
+        from bs4 import BeautifulSoup as _BS
+        import re as _re
+        soup = _BS(resp.text, "html.parser")
+        lines = [l.strip() for l in soup.get_text().split("\n")]
+        for i, line in enumerate(lines):
+            if line == "\u4fe1\u7528\u500d\u7387":
+                for j in range(i+1, min(i+15, len(lines))):
+                    m = _re.search(r"([\d.]+)\u500d", lines[j])
+                    if m:
+                        return {"ratio": float(m.group(1))}
+    except Exception as e:
+        pass
+    return None
+
 def get_technical_signals(code: str) -> dict:
     """Yahoo Finance から7指標+流動性を計算してシグナルを返す。
     指標: RSI / 25MA乖離 / 出来高急増 / MACD / ボリンジャーバンド / ゴールデン・デッドクロス / 出来高+株価上昇 / 流動性
@@ -2360,12 +2379,24 @@ def build_email_body(
                     lines.append("  🎯 行動指針: 決算直前1週間 → 新規エントリー不可・逆指値確認")
                 elif days_left <= 14:
                     lines.append("  🎯 行動指針: 決算2週間前 → 新規見送り・既存ポジション維持")
-                elif days_left <= 21:
-                    lines.append("  🎯 行動指針: 仕込み終盤 → 逆指値設定を確認")
                 elif days_left <= 42:
                     lines.append("  🎯 行動指針: 🟢仕込みウィンドウ → エントリー検討タイミング")
                 else:
                     lines.append("  🎯 行動指針: ⏳今は観察期間 → 仕込みは6週間前から")
+
+
+        margin = item.get("margin")
+        if margin and margin.get("ratio") is not None:
+            ratio = margin["ratio"]
+            if ratio >= 10:
+                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d \u26a0\ufe0f \u9ad8\u6c34\u6e96\uff08\u8fd4\u6e08\u58f2\u308a\u5727\u529b\u306b\u6ce8\u610f\uff09")
+                lines.append("     \u203b\u4fe1\u7528\u500d\u738710\u500d\u8d85\u306f\u5c06\u6765\u306e\u58f2\u308a\u5727\u529b\u304c\u5f37\u307e\u308b\u30ea\u30b9\u30af\u3042\u308a")
+            elif ratio >= 5:
+                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d \u25b3 \u3084\u3084\u9ad8\u3081")
+            elif ratio <= 1:
+                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d \U0001f7e2 \u4f4e\u6c34\u6e96\uff08\u8e0f\u307f\u4e0a\u3052\u671f\u5f85\uff09")
+            else:
+                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d")
 
         peg_v = f.get("peg")
         if passed or (peg_v and peg_v <= 1):
@@ -2703,11 +2734,12 @@ def main():
         price      = get_stock_price(stock["code"])
         news       = get_stock_news(stock["code"]) if passed else []
         signals    = get_technical_signals(stock["code"])
+        margin     = get_margin_ratio(stock["code"])
         print(f"    バフェット: {'✔ 通過' if passed else '✘ 不通過'} "
               f"ROE={buffett['roe']} 自己資本比率={buffett['equity_ratio']}")
         stock_data.append({
             "stock": stock, "buffett": buffett, "buffett_passed": passed,
-            "price": price, "news": news, "signals": signals,
+            "price": price, "news": news, "signals": signals, "margin": margin,
         })
 
     # 日経平均・東証33業種
