@@ -1,8 +1,8 @@
 name: IR・WTI 毎朝通知
 
 on:
-    # schedule:
-    #   - cron: '0 20 * * *'
+　　# schedule:
+　　#   - cron: '0 20 * * *'
   workflow_dispatch:
 
 jobs:
