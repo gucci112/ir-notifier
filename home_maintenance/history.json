@@ -22,5 +22,9 @@
   "aquarium_filter": {
     "last_replaced": "2026-01-01",
     "memo": ""
+  },
+  "office_water_filter": {
+    "last_replaced": "2025-01-01",
+    "memo": ""
   }
 }

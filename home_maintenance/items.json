@@ -52,5 +52,14 @@
     "warn_days": 30,
     "alert_days": 60,
     "note": "6ヶ月ごと清掃"
+  },
+  {
+    "id": "office_water_filter",
+    "name": "職場ウォーターサーバーフィルター（ECOウォーター）",
+    "interval_days": 548,
+    "notify_before_days": 7,
+    "warn_days": 30,
+    "alert_days": 60,
+    "note": "1年半ごと交換"
   }
 ]
