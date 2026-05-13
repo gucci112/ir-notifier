@@ -275,7 +275,7 @@ async function fetchGitHubFile(path) {
   if (!res.ok) throw new Error(`GitHub取得エラー: ${path} (${res.status})`);
   const data = await res.json();
   return {
-    content: JSON.parse(atob(data.content.replace(/\n/g, ""))),
+    content: JSON.parse(decodeURIComponent(escape(atob(data.content.replace(/\n/g, ""))))),
     sha: data.sha,
   };
 }
