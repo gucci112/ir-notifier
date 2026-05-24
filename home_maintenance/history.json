@@ -26,5 +26,9 @@
   "office_water_filter": {
     "last_replaced": "2025-01-01",
     "memo": ""
+  },
+  "kitchen_fan_filter": {
+    "last_replaced": "2026-05-24",
+    "memo": ""
   }
 }

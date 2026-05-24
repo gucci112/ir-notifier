@@ -61,5 +61,14 @@
     "warn_days": 30,
     "alert_days": 60,
     "note": "1年半ごと交換"
+  },
+  {
+    "id": "kitchen_fan_filter",
+    "name": "台所換気扇フィルター",
+    "interval_days": 60,
+    "notify_before_days": 7,
+    "warn_days": 14,
+    "alert_days": 30,
+    "note": "2ヶ月ごと交換"
   }
 ]
