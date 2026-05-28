@@ -70,5 +70,23 @@
     "warn_days": 14,
     "alert_days": 30,
     "note": "2ヶ月ごと交換"
+  },
+  {
+    "id": "home_server_glass",
+    "name": "自宅Wサーバー 保存ガラス容器清掃",
+    "interval_days": 90,
+    "notify_before_days": 7,
+    "warn_days": 14,
+    "alert_days": 30,
+    "note": "3ヶ月ごと清掃"
+  },
+  {
+    "id": "office_server_glass",
+    "name": "職場Wサーバー 保存ガラス容器清掃",
+    "interval_days": 90,
+    "notify_before_days": 7,
+    "warn_days": 14,
+    "alert_days": 30,
+    "note": "3ヶ月ごと清掃"
   }
 ]

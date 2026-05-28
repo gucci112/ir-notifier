@@ -30,5 +30,13 @@
   "kitchen_fan_filter": {
     "last_replaced": "2026-05-24",
     "memo": ""
+  },
+  "home_server_glass": {
+    "last_replaced": "2026-05-28",
+    "memo": ""
+  },
+  "office_server_glass": {
+    "last_replaced": "",
+    "memo": "日程未定"
   }
 }
