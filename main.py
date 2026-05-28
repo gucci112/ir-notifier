@@ -64,7 +64,6 @@ _kabutan_session: requests.Session | None = None
 
 
 def _get_kabutan_session() -> requests.Session:
-    """kabutan.jp 用セッションを返す。初回呼び出し時にホームページを訪問してCookieを取得する。"""
     global _kabutan_session
     if _kabutan_session is not None:
         return _kabutan_session
@@ -80,85 +79,25 @@ def _get_kabutan_session() -> requests.Session:
 # ============================================================
 # バフェット指標スクリーニング 閾値
 # ============================================================
-# テーマ環境指標（監視銘柄ではなく市場温度計として使用）
 THEME_INDICATORS = [
-    {"name": "安川電機",     "code": "6506", "theme": "半導体・FA",   "note": "FA・ロボット先行指標"},
+    {"name": "安川電機",         "code": "6506", "theme": "半導体・FA",     "note": "FA・ロボット先行指標"},
     {"name": "東京エレクトロン", "code": "8035", "theme": "半導体製造装置", "note": "半導体サイクル先行指標"},
-    {"name": "レーザーテック", "code": "6920", "theme": "半導体検査",   "note": "半導体高値圏の温度計"},
-    {"name": "商船三井",     "code": "9104", "theme": "海運",        "note": "地政学リスク・ホルムズ指標"},
-    {"name": "INPEX",       "code": "1605", "theme": "原油",        "note": "WTI連動・エネルギー指標"},
+    {"name": "レーザーテック",   "code": "6920", "theme": "半導体検査",     "note": "半導体高値圏の温度計"},
+    {"name": "商船三井",         "code": "9104", "theme": "海運",           "note": "地政学リスク・ホルムズ指標"},
+    {"name": "INPEX",            "code": "1605", "theme": "原油",           "note": "WTI連動・エネルギー指標"},
 ]
 
-# テーマ環境指標（監視銘柄ではなく市場温度計として使用）
-THEME_INDICATORS = [
-    {"name": "安川電機",     "code": "6506", "theme": "半導体・FA",   "note": "FA・ロボット先行指標"},
-    {"name": "東京エレクトロン", "code": "8035", "theme": "半導体製造装置", "note": "半導体サイクル先行指標"},
-    {"name": "レーザーテック", "code": "6920", "theme": "半導体検査",   "note": "半導体高値圏の温度計"},
-    {"name": "商船三井",     "code": "9104", "theme": "海運",        "note": "地政学リスク・ホルムズ指標"},
-    {"name": "INPEX",       "code": "1605", "theme": "原油",        "note": "WTI連動・エネルギー指標"},
-]
-
-ROE_MIN          = 15.0   # ROE 15% 以上
-EQUITY_RATIO_MIN = 40.0   # 自己資本比率 40% 以上
+ROE_MIN          = 15.0
+EQUITY_RATIO_MIN = 40.0
 
 
 # ============================================================
-# 株探 → 決算発表予定日の自動取得
-# ============================================================
-def get_earnings_date_from_kabutan(code: str) -> str | None:
-    """株探の銘柄ページから決算発表予定日を自動取得する。
-    返り値: "YYYY-MM-DD" 形式 or None
-    """
-    url = f"https://kabutan.jp/stock/?code={code}"
-    try:
-        session = _get_kabutan_session()
-        resp = session.get(url, headers={"Referer": "https://kabutan.jp/"}, timeout=15)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        text = soup.get_text()
-
-        # 「決算発表予定日」の直後にある YYYY/MM/DD を探す
-        lines = text.split("\n")
-        for i, line in enumerate(lines):
-            if "決算発表予定日" in line:
-                # 同じ行または次の数行から日付を探す
-                search_range = lines[i:i+5]
-                for l in search_range:
-                    import re as _re
-                    m = _re.search(r'(202\d)[/年](\d{1,2})[/月](\d{1,2})', l)
-                    if m:
-                        y, mo, d = m.group(1), m.group(2).zfill(2), m.group(3).zfill(2)
-                        return f"{y}-{mo}-{d}"
-    except Exception as e:
-        print(f"    [警告] {code} 決算日取得失敗: {e}")
-    return None
-
-
-def fetch_all_earnings_dates(stocks: list) -> dict:
-    """全監視銘柄の決算発表予定日を株探から取得する。
-    手動設定済みの場合はそちらを優先しない（常に最新を取得）。
-    返り値: {code: "YYYY-MM-DD" or None}
-    """
-    result = {}
-    for stock in stocks:
-        code = stock["code"]
-        date_str = get_earnings_date_from_kabutan(code)
-        result[code] = date_str
-        if date_str:
-            print(f"    [{code}] 決算発表予定日: {date_str}")
-        else:
-            print(f"    [{code}] 決算発表予定日: 取得できませんでした")
-    return result
-
-
-# ============================================================
-# EDINET v2 API → 四半期報告書の決算進捗
+# EDINET v2 API
 # ============================================================
 _EDINET_BASE = "https://disclosure.edinet-fsa.go.jp/api/v2"
 _XBRL_NS     = "http://www.xbrl.org/2003/instance"
 _XSI_NIL     = "{http://www.w3.org/2001/XMLSchema-instance}nil"
 
-# XBRL 要素名セット（複数の命名規則に対応）
 _XBRL_ELEMS = {
     "sales": {
         "NetSalesSummaryOfBusinessResults", "NetSales",
@@ -188,7 +127,6 @@ def _edinet_headers() -> dict:
 
 
 def _edinet_doc_list(date_str: str) -> list:
-    """指定日に提出された書類一覧を返す"""
     try:
         res = requests.get(
             f"{_EDINET_BASE}/documents.json",
@@ -206,24 +144,15 @@ def _edinet_doc_list(date_str: str) -> list:
 
 
 def _match_sec_code(raw: str, codes4: list) -> str | None:
-    """EDINETのsecCode（5桁・スペース含む等）を4桁コードにマッチングする。
-    例: '60550' → '6055' / '6055 ' → '6055' / '6055' → '6055'
-    """
     raw = (raw or "").strip()
-    # 先頭4桁が一致するか確認
     if len(raw) >= 4 and raw[:4] in codes4:
         return raw[:4]
-    # 末尾が '0' の5桁コード（例: '60550'）→ 先頭4桁
     if len(raw) == 5 and raw[4] == "0" and raw[:4] in codes4:
         return raw[:4]
     return None
 
 
 def _find_quarterly_docs(codes4: list) -> dict:
-    """各4桁証券コードの最新四半期/半期報告書を最大90日遡って検索。
-    2024年4月から四半期報告書(120)が廃止され半期報告書(130)に統合されたため両方を対象とする。
-    secCodeは5桁・スペース・末尾0など表記ゆれがあるため柔軟にマッチングする。
-    """
     TARGET_CODES = {"120", "130"}
     found, today = {}, date.today()
     for delta in range(90):
@@ -243,7 +172,6 @@ def _find_quarterly_docs(codes4: list) -> dict:
 
 
 def _fetch_xbrl_text(doc_id: str) -> str:
-    """EDINET書類ZIPをダウンロードし、最大のXBRLインスタンス文書を返す"""
     res = requests.get(
         f"{_EDINET_BASE}/documents/{doc_id}",
         params={"type": 1},
@@ -263,13 +191,11 @@ def _fetch_xbrl_text(doc_id: str) -> str:
 
 
 def _parse_xbrl(xbrl: str) -> dict:
-    """XBRLから売上高・営業利益・純利益（当期累計実績・通期予想）を抽出"""
     try:
         root = ET.fromstring(xbrl)
     except ET.ParseError:
         return {}
 
-    # コンテキスト分類
     actual_ctx, forecast_ctx = set(), set()
     for ctx in root.findall(f"{{{_XBRL_NS}}}context"):
         cid = ctx.get("id", "")
@@ -277,14 +203,12 @@ def _parse_xbrl(xbrl: str) -> dict:
             forecast_ctx.add(cid)
         elif re.search(r"CurrentAccumulated|CurrentYear", cid) and "Prior" not in cid:
             actual_ctx.add(cid)
-    # フォールバック: "Current" を含み Prior/Forecast でないもの
     if not actual_ctx:
         for ctx in root.findall(f"{{{_XBRL_NS}}}context"):
             cid = ctx.get("id", "")
             if "Current" in cid and "Forecast" not in cid and "Prior" not in cid:
                 actual_ctx.add(cid)
 
-    # 四半期番号を推定
     quarter = None
     for cid in actual_ctx:
         m = re.search(r"Q([123])", cid)
@@ -319,7 +243,6 @@ def _parse_xbrl(xbrl: str) -> dict:
 
 
 def _judge(progress_pct: float, quarter: str) -> str:
-    """進捗率と四半期ペースから ○△× を判定"""
     pace = {"Q1": 25.0, "Q2": 50.0, "Q3": 75.0}.get(quarter, 100.0)
     diff = progress_pct - pace
     if diff >= -5.0:
@@ -331,7 +254,6 @@ def _judge(progress_pct: float, quarter: str) -> str:
 
 
 def get_edinet_financials(stocks: list) -> list:
-    """監視銘柄の四半期報告書から決算進捗データを取得"""
     if not EDINET_API_KEY:
         return []
     codes4 = [s["code"][:4] for s in stocks]
@@ -369,18 +291,15 @@ def get_edinet_financials(stocks: list) -> list:
 
 
 # ============================================================
-# アルジャジーラ RSS → 世界情勢ニュース抽出
+# アルジャジーラ RSS
 # ============================================================
 _WORLD_KEYWORDS = [
-    # 経済・金融
     "economy", "economic", "inflation", "recession", "gdp", "debt", "trade",
     "tariff", "sanction", "dollar", "currency", "market", "finance", "financial",
     "bank", "interest rate", "federal reserve", "central bank", "imf",
     "investment", "bond", "deficit", "surplus", "export", "import",
-    # エネルギー
     "oil", "gas", "energy", "opec", "crude", "petroleum", "fuel", "nuclear",
     "pipeline", "lng", "electricity", "renewable",
-    # 地政学リスク
     "war", "conflict", "tension", "crisis", "military", "attack", "ceasefire",
     "missile", "protest", "coup", "nato", "troops", "invasion", "occupation",
     "blockade", "embargo", "strait", "geopolit", "escalat", "airstrike",
@@ -388,7 +307,6 @@ _WORLD_KEYWORDS = [
 ]
 
 def get_aljazeera_news(max_items: int = 7) -> list:
-    """アルジャジーラRSSから経済・エネルギー・地政学ニュースをスコアリングして返す"""
     url = f"https://www.aljazeera.com/xml/rss/all.xml?_={int(time.time())}"
     try:
         res = requests.get(url, headers={
@@ -424,14 +342,7 @@ def get_aljazeera_news(max_items: int = 7) -> list:
     return []
 
 
-# ============================================================
-# Claude API — Al Jazeeraニュース 株価影響判定＋日本語要約
-# ============================================================
 def analyze_aljazeera_news(news_items: list) -> list:
-    """Claude Haiku で Al Jazeera ニュースを分析し impact/summary を付与して返す。
-    ANTHROPIC_API_KEY 未設定時はそのまま返す（フォールバック）。
-    全記事を1回のAPIコールで処理してコストを最小化する。
-    """
     if not ANTHROPIC_API_KEY or not news_items:
         return news_items
 
@@ -458,7 +369,6 @@ def analyze_aljazeera_news(news_items: list) -> list:
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
-        # コードブロック除去（念のため）
         raw = re.sub(r"^```[^\n]*\n?", "", raw)
         raw = re.sub(r"\n?```$", "", raw)
         results = json.loads(raw)
@@ -476,11 +386,11 @@ def analyze_aljazeera_news(news_items: list) -> list:
 
     except Exception as e:
         print(f"    [警告] Claude API分析失敗: {e}")
-        return news_items  # フォールバック: 元データをそのまま返す
+        return news_items
 
 
 # ============================================================
-# Claude API — バフェット視点での銘柄コメント生成
+# Claude API — バフェット視点
 # ============================================================
 _BUFFETT_CRITERIA = """
 バフェット投資哲学の基準：
@@ -496,11 +406,6 @@ _BUFFETT_CRITERIA = """
 
 
 def analyze_with_buffett_lens(stock_data: list) -> dict:
-    """Claude Haiku でバフェット視点の銘柄コメントを生成する。
-    ANTHROPIC_API_KEY 未設定・エラー時は空dictを返す。
-    全銘柄を1回のAPIコールで処理してコストを最小化する。
-    戻り値: {code: {"verdict": str, "comment": str}}
-    """
     if not ANTHROPIC_API_KEY or not stock_data:
         return {}
 
@@ -573,7 +478,6 @@ _NHK_RSS_FEEDS = [
 
 
 def get_nhk_risk_news(max_per_feed: int = 5) -> list:
-    """NHK経済・国際RSSから関税・地政学リスク関連ニュースを取得する。"""
     results = []
     for _category, url in _NHK_RSS_FEEDS:
         try:
@@ -602,31 +506,26 @@ def get_nhk_risk_news(max_per_feed: int = 5) -> list:
 
 
 # ============================================================
-# 世界ビジネスニュース RSS → マクロ・地政学ニュース抽出
+# 世界ビジネスニュース RSS
 # ============================================================
 _WORLD_NEWS_KEYWORDS = [
-    # 経済・金融
     "economy", "economic", "inflation", "recession", "gdp", "trade",
     "tariff", "sanction", "dollar", "currency", "market", "finance",
     "bank", "interest rate", "federal reserve", "central bank", "imf",
     "investment", "bond", "deficit", "export", "import",
-    # エネルギー
     "oil", "gas", "energy", "opec", "crude", "petroleum", "fuel",
     "pipeline", "lng", "nuclear",
-    # 地政学リスク
     "war", "conflict", "tension", "crisis", "military", "ceasefire",
     "missile", "coup", "nato", "invasion", "embargo", "strait",
     "geopolit", "escalat", "sanction", "alliance",
-    # 企業・市場
     "earnings", "revenue", "profit", "stock", "shares", "ipo",
     "merger", "acquisition", "supply chain", "semiconductor",
 ]
 
-# (source_name, url) の順で試す。最初に成功したものを採用
 _WORLD_NEWS_FEEDS = [
-    ("BBC Business",        "https://feeds.bbci.co.uk/news/business/rss.xml"),
-    ("AP Business",         "https://rsshub.app/ap/topics/business"),
-    ("Financial Times",     "https://www.ft.com/rss/home/uk"),
+    ("BBC Business",    "https://feeds.bbci.co.uk/news/business/rss.xml"),
+    ("AP Business",     "https://rsshub.app/ap/topics/business"),
+    ("Financial Times", "https://www.ft.com/rss/home/uk"),
 ]
 
 _WORLD_NEWS_UA = (
@@ -637,8 +536,6 @@ _WORLD_NEWS_UA = (
 
 
 def get_world_business_news(max_items: int = 5) -> tuple[list, str]:
-    """複数のRSSソースを順番に試し、最初に取得できたものからニュースを返す。
-    戻り値: (ニュースリスト, ソース名)"""
     for source_name, url in _WORLD_NEWS_FEEDS:
         scored = []
         try:
@@ -684,28 +581,22 @@ def get_world_business_news(max_items: int = 5) -> tuple[list, str]:
     return [], ""
 
 
-# 後方互換エイリアス（既存呼び出し箇所が残っている場合に備えて）
 def get_reuters_news(max_items: int = 5) -> list:
     news, _ = get_world_business_news(max_items)
     return news
 
 
 # ============================================================
-# バフェット指標取得（kabutan.jp /stock/finance）
+# バフェット指標取得
 # ============================================================
 def _extract_col_value(table, col_keywords: list, exact: bool = False) -> float | None:
-    """テーブルのヘッダー行からキーワードが一致する列を探し、最新実績行の値を返す。
-    kabutan.jp は「ヘッダー行 → データ行」の縦持ち構造。全角/半角どちらにも対応。
-    exact=True の場合は部分一致でなく完全一致で列を探す。"""
     rows = table.find_all("tr")
     if not rows:
         return None
 
-    # ヘッダー行から対象列インデックスを探す
     header_cells = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
     col_idx = None
     for i, h in enumerate(header_cells):
-        # 全角→半角に正規化して比較
         h_norm = h.replace("Ｒ", "R").replace("Ｏ", "O").replace("Ｅ", "E")
         if exact:
             match = any(kw == h or kw == h_norm for kw in col_keywords)
@@ -717,7 +608,6 @@ def _extract_col_value(table, col_keywords: list, exact: bool = False) -> float 
     if col_idx is None:
         return None
 
-    # データ行を逆順に走査し、最新の実績値（予想行・空行を除く）を返す
     for row in reversed(rows[1:]):
         cells = row.find_all(["th", "td"])
         if not cells or col_idx >= len(cells):
@@ -738,7 +628,6 @@ def _extract_col_value(table, col_keywords: list, exact: bool = False) -> float 
 
 
 def _parse_ratio_float(s: str) -> float | None:
-    """'18.9倍' や '－倍' などの比率文字列を float に変換する。－ は None を返す。"""
     raw = s.replace("倍", "").replace(",", "").replace("－", "").strip()
     try:
         return float(raw)
@@ -747,46 +636,41 @@ def _parse_ratio_float(s: str) -> float | None:
 
 
 def _parse_mktcap_mn(s: str) -> float | None:
-    """時価総額文字列（例: '1,744億円', '11兆8,954億円'）を百万円単位の float に変換する。"""
     s = s.replace(",", "").replace("円", "").strip()
     mn = 0.0
     if "兆" in s:
         parts = s.split("兆")
-        mn += float(parts[0]) * 1_000_000  # 1兆円 = 1,000,000百万円
+        mn += float(parts[0]) * 1_000_000
         s = parts[1]
     if "億" in s:
-        mn += float(s.replace("億", "")) * 100  # 1億円 = 100百万円
+        mn += float(s.replace("億", "")) * 100
         return mn
     return None
 
 
 def _classify_cf_pattern(op_cf: float, inv_cf: float, fin_cf: float) -> str:
-    """営業CF・投資CF・財務CFの符号からキャッシュフローパターンを分類する。"""
     op_pos  = op_cf  > 0
     inv_neg = inv_cf < 0
     fin_pos = fin_cf > 0
     if op_pos and inv_neg and fin_pos:
-        return "成長型"       # 本業好調＋積極投資＋外部調達
+        return "成長型"
     if op_pos and inv_neg and not fin_pos:
-        return "安定型"       # 本業好調＋適度な投資＋借入返済・株主還元
+        return "安定型"
     if op_pos and not inv_neg and not fin_pos:
-        return "収穫型"       # 本業好調＋資産回収＋借入返済・株主還元
+        return "収穫型"
     if op_pos and not inv_neg and fin_pos:
-        return "キャッシュ蓄積型"  # 本業好調＋資産回収＋外部調達でキャッシュ積み上げ
+        return "キャッシュ蓄積型"
     if not op_pos and inv_cf > 0 and fin_pos:
-        return "再建型"       # 本業不振＋資産売却＋外部調達で再建中
+        return "再建型"
     if not op_pos and inv_cf > 0 and not fin_pos:
-        return "リストラ型"   # 本業不振＋資産売却で借入返済
+        return "リストラ型"
     if not op_pos and inv_neg:
-        return "危険型"       # 本業不振＋借入で投資継続
+        return "危険型"
     return "その他"
 
 
 def _calc_health_score(f: dict) -> int:
-    """ROE・ROIC・CFパターン・売上成長率・営業利益率から100点満点のヘルススコアを算出する。"""
     score = 0
-
-    # ROE（25点）
     roe = f.get("roe")
     if roe is not None:
         if roe >= 20:   score += 25
@@ -794,28 +678,24 @@ def _calc_health_score(f: dict) -> int:
         elif roe >= 10: score += 15
         elif roe >= 5:  score += 8
 
-    # ROIC（25点）
     roic = f.get("roic")
     if roic is not None:
         if roic >= 15:   score += 25
         elif roic >= 10: score += 20
         elif roic >= 5:  score += 10
 
-    # CFパターン（20点）
     cf_scores = {
         "安定型": 20, "成長型": 15, "収穫型": 15,
         "キャッシュ蓄積型": 10, "再建型": 5, "リストラ型": 5, "危険型": 0,
     }
     score += cf_scores.get(f.get("cf_pattern") or "", 0)
 
-    # 売上成長率（20点）
     sg = f.get("sales_growth")
     if sg is not None:
         if sg >= 10:  score += 20
         elif sg >= 5: score += 15
         elif sg >= 0: score += 8
 
-    # 営業利益率（10点）
     om = f.get("op_margin")
     if om is not None:
         if om >= 20:   score += 10
@@ -826,8 +706,6 @@ def _calc_health_score(f: dict) -> int:
 
 
 def _extract_bs_value(tables, *keywords: str) -> float | None:
-    """BS テーブルの行ラベル（最初のセル）でキーワードを探し、最新期の値（2列目）を返す。
-    複数キーワードはいずれか一致で OK。"""
     for table in tables:
         for row in table.find_all("tr"):
             cells = row.find_all(["th", "td"])
@@ -847,7 +725,6 @@ def _extract_bs_value(tables, *keywords: str) -> float | None:
 
 
 def get_financial_data(code: str) -> dict:
-    """kabutan.jp の財務ページから ROE・自己資本比率・ROIC・CFパターン・来期純利益予想を取得する。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
     try:
         session = _get_kabutan_session()
@@ -869,7 +746,6 @@ def get_financial_data(code: str) -> dict:
             header_cells = [c.get_text(strip=True) for c in tr.find_all(["th", "td"])]
             header_text  = " ".join(header_cells)
 
-            # PER・PBR・時価総額テーブル（Table2: 行1=ラベル, 行2=値, 行3=時価総額）
             if per is None and "PER" in header_cells and "PBR" in header_cells:
                 rows_t2 = table.find_all("tr")
                 if len(rows_t2) >= 2:
@@ -881,31 +757,26 @@ def get_financial_data(code: str) -> dict:
                     if len(mc_cells) >= 2:
                         mktcap_mn = _parse_mktcap_mn(mc_cells[1])
 
-            # 収益性テーブル（ROE・営業益・売上営業利益率）
             elif roe is None and ("ＲＯＥ" in header_text or "ROE" in header_text) and "総資産回転率" in header_text:
                 roe       = _extract_col_value(table, ["ＲＯＥ", "ROE"])
                 op_income = _extract_col_value(table, ["営業益"])
                 op_margin = _extract_col_value(table, ["売上営業利益率"])
 
-            # 財務テーブル（自己資本比率・自己資本・有利子負債倍率）
             elif equity_ratio is None and "自己資本比率" in header_text and "有利子負債倍率" in header_text:
                 equity_ratio = _extract_col_value(table, ["自己資本比率"])
                 equity       = _extract_col_value(table, ["自己資本"], exact=True)
                 debt_ratio   = _extract_col_value(table, ["有利子負債倍率"])
 
-            # CFテーブル（営業CF・投資CF・財務CF・現金等残高）
             elif op_cf is None and "営業CF" in header_text and "投資CF" in header_text:
                 op_cf  = _extract_col_value(table, ["営業CF"],     exact=True)
                 inv_cf = _extract_col_value(table, ["投資CF"],     exact=True)
                 fin_cf = _extract_col_value(table, ["財務CF"],     exact=True)
                 cash   = _extract_col_value(table, ["現金等残高"], exact=True)
 
-            # 通期決算テーブル（実績最終益・来期予想最終益・売上成長率）— 半期テーブルを除外
             elif actual_ni is None and "最終益" in header_cells and "修正1株配" in header_cells:
                 ni_col    = header_cells.index("最終益")
                 sales_col = header_cells.index("売上高") if "売上高" in header_cells else None
 
-                # reversed で最新順に走査し、実績最終益・来期予想・売上高2期分を取得
                 sales_actual: list[float] = []
                 for row in reversed(table.find_all("tr")[1:]):
                     cells = row.find_all(["th", "td"])
@@ -914,7 +785,6 @@ def get_financial_data(code: str) -> dict:
                     first = cells[0].get_text(strip=True)
                     if not first:
                         continue
-                    # 年度形式（YYYY.MM）のみ対象。半期テーブル（YY.MM-MM）は除外
                     period = first.lstrip("予連")
                     if not re.match(r'^\d{4}\.\d{2}$', period):
                         continue
@@ -930,7 +800,6 @@ def get_financial_data(code: str) -> dict:
                     else:
                         if actual_ni is None and val is not None:
                             actual_ni = val
-                        # 売上高を最大2期分収集（最新→前期の順）
                         if sales_col is not None and len(sales_actual) < 2:
                             s_raw = (cells[sales_col].get_text(strip=True)
                                      .replace(",", "").strip())
@@ -939,14 +808,11 @@ def get_financial_data(code: str) -> dict:
                             except ValueError:
                                 pass
 
-                # 売上成長率 = (当期 - 前期) / 前期 × 100
                 if len(sales_actual) >= 2 and sales_actual[1] != 0:
                     sales_growth = round(
                         (sales_actual[0] - sales_actual[1]) / sales_actual[1] * 100, 1
                     )
 
-        # 税前ROIC = 営業利益(EBIT) / 投下資本（edinetdb.jp方式: 純資産 + 有利子負債 - 現金）
-        # ※ 営業利益は税引前利益であるため、このROICは税前ベース。閾値 ≥15%
         roic = None
         if op_income is not None and equity is not None and equity > 0:
             dr              = debt_ratio if debt_ratio is not None else 0.0
@@ -954,38 +820,28 @@ def get_financial_data(code: str) -> dict:
             if invested_capital > 0:
                 roic = round(op_income / invested_capital * 100, 1)
 
-        # CFパターン判定
         cf_pattern = None
         if op_cf is not None and inv_cf is not None and fin_cf is not None:
             cf_pattern = _classify_cf_pattern(op_cf, inv_cf, fin_cf)
 
-        # 来期純利益予想の前年比
         ni_forecast_yoy = None
         if actual_ni is not None and forecast_ni is not None and actual_ni != 0:
             ni_forecast_yoy = round((forecast_ni - actual_ni) / abs(actual_ni) * 100, 1)
 
-        # PEG比率 = PER ÷ 売上成長率（成長率が正の場合のみ）
         peg = None
         if per is not None and sales_growth is not None and sales_growth > 0:
             peg = round(per / sales_growth, 2)
 
-        # グレアムスコア = PER × PBR（22.5以下で割安）
         graham = None
         if per is not None and pbr is not None:
             graham = round(per * pbr, 1)
 
-        # EV/EBITDA（EBITDAは営業利益で代替、kabutan.jpに減価償却費の個別開示なし）
-        # EV = 時価総額 + 有利子負債 - 現金（edinetdb.jp方式と同一）
         ev_ebitda = None
         _interest_debt = (equity or 0) * (debt_ratio if debt_ratio is not None else 0.0)
         if mktcap_mn is not None and op_income is not None and op_income > 0:
             ev = mktcap_mn + _interest_debt - (cash or 0)
             ev_ebitda = round(ev / op_income, 1)
 
-        # netCashRatio（清原式）
-        # 正式: (流動資産 + 投資有価証券×0.7 - 負債合計) / 時価総額
-        # 投資有価証券取得不可の場合: (流動資産 - 負債合計) / 時価総額 ※近似
-        # BS値取得不可の場合: (現金等残高 - 有利子負債) / 時価総額 ※近似
         net_cash_ratio = None
         net_cash_ratio_approx = False
         all_tables = soup.find_all("table")
@@ -997,14 +853,12 @@ def get_financial_data(code: str) -> dict:
                 _net_cash = _current_assets + _invest_sec * 0.7 - _total_liabilities
             else:
                 _net_cash = _current_assets - _total_liabilities
-                net_cash_ratio_approx = True  # 投資有価証券除く
+                net_cash_ratio_approx = True
             net_cash_ratio = round(_net_cash / mktcap_mn, 2)
         elif cash is not None and mktcap_mn is not None and mktcap_mn > 0:
-            # フォールバック: BS値取得不可のため現金・有利子負債で近似
             net_cash_ratio = round((cash - _interest_debt) / mktcap_mn, 2)
             net_cash_ratio_approx = True
 
-        # ヘルススコア（100点満点）
         financials_for_score = {
             "roe": roe, "roic": roic, "cf_pattern": cf_pattern,
             "sales_growth": sales_growth, "op_margin": op_margin,
@@ -1042,7 +896,6 @@ def get_financial_data(code: str) -> dict:
 
 
 def passes_buffett_screen(financials: dict) -> bool:
-    """ROE >= 15% かつ 自己資本比率 >= 40% で通過"""
     roe = financials.get("roe")
     eq  = financials.get("equity_ratio")
     if roe is None or eq is None:
@@ -1051,13 +904,11 @@ def passes_buffett_screen(financials: dict) -> bool:
 
 
 # ============================================================
-# IR・ニュース取得（kabutan.jp）
+# IR・ニュース取得
 # ============================================================
 def get_stock_news(code: str, max_items: int = 5) -> list:
-    """kabutan.jp の IR・ニュースページから最新情報を取得する"""
     results = []
 
-    # ニュース取得（kabutan.jp /stock/news のみ）
     for path in [f"/stock/news?code={code}"]:
         url = f"https://kabutan.jp{path}"
         try:
@@ -1066,14 +917,13 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
             res.raise_for_status()
             soup = BeautifulSoup(res.text, "html.parser")
 
-            # テーブル行を探す（複数のセレクタに対応）
             SELECTORS = [
                 "table.s-news-list tr",
                 "table.news_list tr",
                 "#newslist table tr",
                 "div#news_list table tr",
                 "div.news_box table tr",
-                "table tr",           # 最後の手段：ページ内の全テーブル行
+                "table tr",
             ]
             rows = []
             for sel in SELECTORS:
@@ -1087,10 +937,8 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
                     continue
 
                 date_text = tds[0].get_text(strip=True)
-                # ヘッダー行や空行はスキップ
                 if not date_text or date_text in ("日付", "日時", ""):
                     continue
-                # 日付らしくない行はスキップ（数字が含まれない）
                 if not any(c.isdigit() for c in date_text):
                     continue
 
@@ -1104,27 +952,28 @@ def get_stock_news(code: str, max_items: int = 5) -> list:
                     href = "https://kabutan.jp" + href
 
                 results.append({
-                    "date":  date_text,
-                    "title": title,
-                    "url":   href,
+                    "date":     date_text,
+                    "title":    title,
+                    "url":      href,
+                    "pub_date": date_text,
                 })
 
                 if len(results) >= max_items:
                     break
 
             if results:
-                return results  # 取得できたら終了
+                return results
 
         except requests.RequestException as e:
             print(f"    [警告] {code} のニュース取得失敗 ({url}): {e}")
         except Exception as e:
             print(f"    [警告] {code} のHTML解析失敗: {e}")
 
-    return [{"date": "-", "title": "情報を取得できませんでした", "url": ""}]
+    return [{"date": "-", "title": "情報を取得できませんでした", "url": "", "pub_date": "-"}]
 
 
 # ============================================================
-# Yahoo Finance API から価格取得（共通）
+# Yahoo Finance API
 # ============================================================
 _YF_HEADERS = {
     "User-Agent": (
@@ -1135,7 +984,6 @@ _YF_HEADERS = {
 }
 
 def _fetch_yahoo(symbol: str) -> list:
-    """Yahoo Finance API から直近5日の終値リストを返す"""
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
     res = requests.get(url, headers=_YF_HEADERS, timeout=15)
     res.raise_for_status()
@@ -1145,7 +993,6 @@ def _fetch_yahoo(symbol: str) -> list:
 
 
 def _fetch_yahoo_full(symbol: str, range_: str = "60d") -> tuple[list, list]:
-    """Yahoo Finance から終値・出来高リストを返す (None除外済みペア)。"""
     url = (
         f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
         f"?interval=1d&range={range_}"
@@ -1166,10 +1013,9 @@ def _fetch_yahoo_full(symbol: str, range_: str = "60d") -> tuple[list, list]:
 
 
 # ============================================================
-# テクニカル指標計算
+# テクニカル指標
 # ============================================================
 def _calc_rsi(closes: list, period: int = 14) -> float | None:
-    """Wilder平滑化法による RSI(14) 計算"""
     if len(closes) < period + 1:
         return None
     deltas   = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
@@ -1187,7 +1033,6 @@ def _calc_rsi(closes: list, period: int = 14) -> float | None:
 
 
 def _calc_ma25_dev(closes: list) -> float | None:
-    """25日移動平均線からの乖離率（%）"""
     if len(closes) < 25:
         return None
     ma25 = sum(closes[-25:]) / 25
@@ -1195,7 +1040,6 @@ def _calc_ma25_dev(closes: list) -> float | None:
 
 
 def _calc_vol_surge(volumes: list) -> float | None:
-    """直近出来高の5日平均比（倍率）"""
     if len(volumes) < 6:
         return None
     avg5 = sum(volumes[-6:-1]) / 5
@@ -1205,7 +1049,6 @@ def _calc_vol_surge(volumes: list) -> float | None:
 
 
 def _calc_ema(closes: list, period: int) -> list:
-    """指数移動平均（EMA）リストを返す"""
     if len(closes) < period:
         return []
     k = 2 / (period + 1)
@@ -1216,39 +1059,35 @@ def _calc_ema(closes: list, period: int) -> list:
 
 
 def _calc_macd(closes: list) -> dict:
-    """MACD(12,26,9) を計算して方向性とシグナルとのクロスを返す"""
     if len(closes) < 35:
         return {}
     ema12 = _calc_ema(closes, 12)
     ema26 = _calc_ema(closes, 26)
-    # ema12とema26を同じ長さに揃える
     diff = len(ema12) - len(ema26)
     ema12 = ema12[diff:]
     macd_line = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
     if len(macd_line) < 9:
         return {}
     signal_line = _calc_ema(macd_line, 9)
-    # macd_lineとsignal_lineの末尾2点でクロス判定
     diff2 = len(macd_line) - len(signal_line)
     macd_tail = macd_line[diff2:]
     if len(macd_tail) < 2 or len(signal_line) < 2:
         return {}
     prev_diff = macd_tail[-2] - signal_line[-2]
     curr_diff = macd_tail[-1] - signal_line[-1]
-    golden = prev_diff < 0 and curr_diff >= 0   # ゴールデンクロス（買い）
-    dead   = prev_diff > 0 and curr_diff <= 0   # デッドクロス（売り）
+    golden = prev_diff < 0 and curr_diff >= 0
+    dead   = prev_diff > 0 and curr_diff <= 0
     return {
-        "macd":   round(macd_tail[-1], 4),
-        "signal": round(signal_line[-1], 4),
-        "hist":   round(curr_diff, 4),
-        "golden": golden,
-        "dead":   dead,
-        "bullish": curr_diff > 0,  # MACDがシグナル線より上 = 上昇トレンド
+        "macd":    round(macd_tail[-1], 4),
+        "signal":  round(signal_line[-1], 4),
+        "hist":    round(curr_diff, 4),
+        "golden":  golden,
+        "dead":    dead,
+        "bullish": curr_diff > 0,
     }
 
 
 def _calc_bollinger(closes: list, period: int = 25, sigma: float = 2.0) -> dict:
-    """ボリンジャーバンド（±2σ）を計算して位置を返す"""
     if len(closes) < period:
         return {}
     window = closes[-period:]
@@ -1262,14 +1101,13 @@ def _calc_bollinger(closes: list, period: int = 25, sigma: float = 2.0) -> dict:
         "lower": round(lower, 2),
         "ma":    round(ma, 2),
         "std":   round(std, 2),
-        "above_upper": price >= upper,   # 上限突破 → 過熱・売り候補
-        "below_lower": price <= lower,   # 下限突破 → 売られすぎ・買い候補
+        "above_upper": price >= upper,
+        "below_lower": price <= lower,
         "pct_b": round((price - lower) / (upper - lower) * 100, 1) if upper != lower else 50.0,
     }
 
 
 def _calc_golden_dead_cross(closes: list) -> dict:
-    """5日・25日MAのゴールデン/デッドクロスを判定"""
     if len(closes) < 26:
         return {}
     ma5_prev  = sum(closes[-6:-1]) / 5
@@ -1283,53 +1121,27 @@ def _calc_golden_dead_cross(closes: list) -> dict:
         "ma25":   round(ma25_curr, 2),
         "golden": golden,
         "dead":   dead,
-        "above":  ma5_curr > ma25_curr,  # 5MA > 25MA = 上昇トレンド中
+        "above":  ma5_curr > ma25_curr,
     }
 
 
 def _calc_liquidity(closes: list, volumes: list) -> dict:
-    """直近5日の日次売買代金（株価×出来高）から流動性リスクを判定する。
-    基準: 1億円以上=OK / 3000万〜1億円=⚠️ / 3000万円未満=❌流動性不足
-    """
     if len(closes) < 5 or len(volumes) < 5:
         return {"avg_volume_yen": None, "judge": "unknown", "label": "データ不足"}
-    # 直近5日の売買代金（円）= 終値 × 出来高
     daily_values = [c * v for c, v in zip(closes[-5:], volumes[-5:]) if c and v]
     if not daily_values:
         return {"avg_volume_yen": None, "judge": "unknown", "label": "データ不足"}
     avg = sum(daily_values) / len(daily_values)
-    if avg >= 1_0000_0000:        # 1億円以上
+    if avg >= 1_0000_0000:
         judge, label = "ok", f"{avg/1e8:.1f}億円/日"
-    elif avg >= 3000_0000:        # 3000万円以上
+    elif avg >= 3000_0000:
         judge, label = "warn", f"⚠️{avg/1e4:.0f}万円/日（流動性やや低）"
-    else:                          # 3000万円未満
+    else:
         judge, label = "low", f"❌{avg/1e4:.0f}万円/日（流動性不足）"
     return {"avg_volume_yen": round(avg), "judge": judge, "label": label}
 
 
-
-def get_margin_ratio(code: str):
-    try:
-        session = _get_kabutan_session()
-        resp = session.get(f"https://kabutan.jp/stock/?code={code}", headers={"Referer": "https://kabutan.jp/"}, timeout=15)
-        from bs4 import BeautifulSoup as _BS
-        import re as _re
-        soup = _BS(resp.text, "html.parser")
-        lines = [l.strip() for l in soup.get_text().split("\n")]
-        for i, line in enumerate(lines):
-            if line == "\u4fe1\u7528\u500d\u7387":
-                for j in range(i+1, min(i+15, len(lines))):
-                    m = _re.search(r"([\d.]+)\u500d", lines[j])
-                    if m:
-                        return {"ratio": float(m.group(1))}
-    except Exception as e:
-        pass
-    return None
-
 def get_technical_signals(code: str) -> dict:
-    """Yahoo Finance から7指標+流動性を計算してシグナルを返す。
-    指標: RSI / 25MA乖離 / 出来高急増 / MACD / ボリンジャーバンド / ゴールデン・デッドクロス / 出来高+株価上昇 / 流動性
-    """
     try:
         closes, volumes = _fetch_yahoo_full(f"{code}.T", range_="90d")
         rsi       = _calc_rsi(closes)
@@ -1344,7 +1156,6 @@ def get_technical_signals(code: str) -> dict:
         buy_count = 0
         sell_count = 0
 
-        # ① RSI
         if rsi is not None:
             if rsi <= 30:
                 signals.append(f"[買] RSI売られ過ぎ({rsi:.1f})")
@@ -1353,7 +1164,6 @@ def get_technical_signals(code: str) -> dict:
                 signals.append(f"[売] RSI買われ過ぎ({rsi:.1f})")
                 sell_count += 1
 
-        # ② 25MA乖離
         if ma25_dev is not None:
             if ma25_dev <= -5.0:
                 signals.append(f"[買検討] 25MA下方乖離({ma25_dev:+.1f}%)")
@@ -1362,9 +1172,7 @@ def get_technical_signals(code: str) -> dict:
                 signals.append(f"[利確検討] 25MA上方乖離({ma25_dev:+.1f}%)")
                 sell_count += 1
 
-        # ③ 出来高急増
         if vol_surge is not None and vol_surge >= 2.0:
-            # ④ 出来高急増 + 株価上昇の組み合わせ（本物の上昇確認）
             if len(closes) >= 2 and closes[-1] > closes[-2]:
                 signals.append(f"[強買] 出来高急増＋株価上昇({vol_surge:.1f}倍)")
                 buy_count += 2
@@ -1372,7 +1180,6 @@ def get_technical_signals(code: str) -> dict:
                 signals.append(f"[注目] 出来高急増({vol_surge:.1f}倍)")
                 buy_count += 1
 
-        # ⑤ MACD
         if macd:
             if macd.get("golden"):
                 signals.append("[買] MACDゴールデンクロス")
@@ -1383,7 +1190,6 @@ def get_technical_signals(code: str) -> dict:
             elif macd.get("bullish"):
                 signals.append("[↑] MACD上昇トレンド中")
 
-        # ⑥ ボリンジャーバンド
         if boll:
             if boll.get("below_lower"):
                 signals.append(f"[買] BB下限割れ(%-B:{boll['pct_b']:.0f}%)")
@@ -1392,7 +1198,6 @@ def get_technical_signals(code: str) -> dict:
                 signals.append(f"[売] BB上限突破(%-B:{boll['pct_b']:.0f}%)")
                 sell_count += 1
 
-        # ⑦ ゴールデン/デッドクロス（5日・25日MA）
         if cross:
             if cross.get("golden"):
                 signals.append("[買] ゴールデンクロス(5MA>25MA)")
@@ -1401,10 +1206,8 @@ def get_technical_signals(code: str) -> dict:
                 signals.append("[売] デッドクロス(5MA<25MA)")
                 sell_count += 1
 
-        # ⑧ 流動性チェック（売買代金）※メール表示側で別途表示するためsignalsには追加しない
         liq_judge = liquidity.get("judge", "unknown")
 
-        # 総合判定（流動性不足は強制的に警告付き）
         if liq_judge == "low":
             summary = f"⚠️流動性不足（売買困難リスク）"
         elif buy_count >= 3:
@@ -1447,10 +1250,9 @@ def get_technical_signals(code: str) -> dict:
 
 
 # ============================================================
-# 株価取得（Yahoo Finance API）
+# 株価取得
 # ============================================================
 def get_stock_price(code: str) -> dict:
-    """Yahoo Finance API で現在株価・前日比を取得する（東証: コード.T）"""
     try:
         closes = _fetch_yahoo(f"{code}.T")
         if not closes:
@@ -1472,10 +1274,9 @@ def get_stock_price(code: str) -> dict:
 
 
 # ============================================================
-# WTI 原油先物価格取得（Yahoo Finance API）
+# WTI・コーポレートアクション
 # ============================================================
 def get_corporate_actions(stocks: list) -> dict:
-    """EDINET DB APIからコーポレートアクション情報を取得する"""
     import os, requests
     api_key = os.environ.get("EDINETDB_API_KEY", "")
     if not api_key:
@@ -1484,7 +1285,6 @@ def get_corporate_actions(stocks: list) -> dict:
     for stock in stocks:
         code = stock["code"]
         try:
-            # 企業検索でEDINETコードを取得
             r = requests.get(
                 f"https://edinetdb.jp/v1/search?q={code}",
                 headers={"X-API-Key": api_key},
@@ -1498,7 +1298,6 @@ def get_corporate_actions(stocks: list) -> dict:
             edinet_code = data[0].get("edinetCode") or data[0].get("edinet_code")
             if not edinet_code:
                 continue
-            # 大株主・増資情報を取得
             r2 = requests.get(
                 f"https://edinetdb.jp/v1/companies/{edinet_code}",
                 headers={"X-API-Key": api_key},
@@ -1508,11 +1307,9 @@ def get_corporate_actions(stocks: list) -> dict:
                 continue
             company = r2.json().get("data", {})
             actions = []
-            # 最新決算からPO・自社株買い情報を確認
             latest = company.get("latestFinancials") or {}
             if latest.get("treasuryStockAcquisition"):
                 actions.append("自社株買い実施中")
-            # 健全性スコア
             health = company.get("healthScore")
             if health:
                 actions.append(f"健全性スコア: {health}/100")
@@ -1525,8 +1322,8 @@ def get_corporate_actions(stocks: list) -> dict:
             continue
     return result
 
+
 def get_wti_price() -> dict:
-    """WTI 原油先物（CL=F）の直近価格を取得する"""
     try:
         closes = _fetch_yahoo("CL%3DF")
         if not closes:
@@ -1547,7 +1344,7 @@ def get_wti_price() -> dict:
 
 
 # ============================================================
-# 日経平均 + 東証33業種トレンド
+# 日経平均 + 東証33業種
 # ============================================================
 _TSE33_NAMES = {
     1: "水産・農林業",    2: "鉱業",            3: "建設業",
@@ -1565,7 +1362,6 @@ _TSE33_NAMES = {
 
 
 def get_nikkei_data() -> dict:
-    """日経平均の現在値・前日比・騰落率を Yahoo Finance API から取得"""
     try:
         closes = _fetch_yahoo("%5EN225")
         if not closes:
@@ -1585,19 +1381,13 @@ def get_nikkei_data() -> dict:
 
 
 def get_sector_trends() -> list:
-    """kabutan.jp トップページの setIndustry() データから東証33業種の騰落率リストを返す
-
-    戻り値: [{"id": int, "name": str, "change_pct": float}, ...]  (騰落率降順)
-    """
     try:
         res = requests.get(f"https://kabutan.jp/?_={int(time.time())}", headers=HEADERS, timeout=15)
         res.raise_for_status()
-        # setIndustry("datas=ID,PCT,#ID,PCT,#...", ...) を抽出
         m = re.search(r'setIndustry\("datas=([^"]+)"', res.text)
         if not m:
             return []
         raw = m.group(1)
-        # 末尾の "#" を除いて "ID,PCT" ペアに分割
         pairs = [p for p in raw.split(",#") if "," in p]
         sectors = []
         for pair in pairs:
@@ -1609,7 +1399,6 @@ def get_sector_trends() -> list:
                 continue
             name = _TSE33_NAMES.get(sid, f"業種{sid}")
             sectors.append({"id": sid, "name": name, "change_pct": pct})
-        # すでに降順ソート済みだが念のため
         sectors.sort(key=lambda x: x["change_pct"], reverse=True)
         return sectors
     except Exception as e:
@@ -1618,13 +1407,9 @@ def get_sector_trends() -> list:
 
 
 # ============================================================
-# 銘柄スクリーニング（kabutan.jp 出来高急増ランキング）
+# 銘柄スクリーニング
 # ============================================================
 _SCREEN_URL = "https://kabutan.jp/warning/?mode=2_1&market=0&page={page}"
-
-# カラム定義（td要素のみ 12列）
-# [コード, 市場, ガイヨウ, チャート, 株価, S印, 前日比, 前日比%, 出来高, PER, PBR, 配当]
-# ※ 銘柄名は <th> タグから別途取得
 _COL_CODE   = 0
 _COL_MARKET = 1
 _COL_PRICE  = 4
@@ -1633,7 +1418,6 @@ _COL_PER    = 9
 
 
 def _get_op_profit(code: str) -> dict:
-    """kabutan.jp 財務ページから営業利益・PBR・時価総額・売上成長率・netCashRatioを取得する。"""
     url = f"https://kabutan.jp/stock/finance?code={code}"
     result = {
         "op_profit": None, "pbr": None, "mktcap_mn": None,
@@ -1646,7 +1430,6 @@ def _get_op_profit(code: str) -> dict:
         soup = BeautifulSoup(res.text, "html.parser")
         tables = soup.find_all("table")
 
-        # Table 2: PBR・時価総額
         if len(tables) > 2:
             t2_rows = tables[2].find_all("tr")
             if len(t2_rows) >= 2:
@@ -1668,7 +1451,6 @@ def _get_op_profit(code: str) -> dict:
             header = [c.get_text(strip=True) for c in rows[0].find_all(["th", "td"])]
             header_text = " ".join(header)
 
-            # 営業益（直近実績）
             if result["op_profit"] is None and "営業益" in header:
                 op_col = header.index("営業益")
                 for row in reversed(rows[1:]):
@@ -1686,16 +1468,13 @@ def _get_op_profit(code: str) -> dict:
                             except ValueError:
                                 pass
 
-            # 財務テーブル（自己資本・有利子負債倍率）
             if _equity is None and "自己資本比率" in header_text and "有利子負債倍率" in header_text:
                 _equity     = _extract_col_value(table, ["自己資本"], exact=True)
                 _debt_ratio = _extract_col_value(table, ["有利子負債倍率"])
 
-            # CFテーブル（現金等残高）
             if _cash is None and "営業CF" in header_text and "投資CF" in header_text:
                 _cash = _extract_col_value(table, ["現金等残高"], exact=True)
 
-            # 売上成長率（通期決算テーブル）
             if result["sales_growth"] is None and "最終益" in header and "修正1株配" in header:
                 sales_col = header.index("売上高") if "売上高" in header else None
                 if sales_col is not None:
@@ -1720,10 +1499,6 @@ def _get_op_profit(code: str) -> dict:
                             (sales_actual[0] - sales_actual[1]) / sales_actual[1] * 100, 1
                         )
 
-        # netCashRatio（清原式）
-        # 正式: (流動資産 + 投資有価証券×0.7 - 負債合計) / 時価総額
-        # 投資有価証券取得不可の場合: (流動資産 - 負債合計) / 時価総額 ※近似
-        # BS値取得不可の場合: (現金等残高 - 有利子負債) / 時価総額 ※近似
         mktcap = result["mktcap_mn"]
         _current_assets2    = _extract_bs_value(tables, "流動資産", "流動資産合計")
         _invest_sec2        = _extract_bs_value(tables, "投資有価証券")
@@ -1746,14 +1521,6 @@ def _get_op_profit(code: str) -> dict:
 
 
 def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
-    """出来高急増ランキングから条件合致銘柄を抽出
-
-    フィルター条件:
-      - 東証グロース / スタンダード
-      - 株価 1000円以下
-      - PER: 0 < PER ≤ 15（"－"=赤字・PER>60=実質赤字水準も除外）
-      - 営業利益（直近通期実績）がプラスであること
-    """
     results = []
 
     for page in range(1, max_pages + 1):
@@ -1792,19 +1559,14 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             if price > 1000:
                 continue
 
-            # PERフィルター:
-            #   "－" → 赤字（当期純損失のためPER算出不可）→ 除外
-            #   PER ≤ 0 → 赤字 → 除外
-            #   PER > 60 → 実質赤字水準（極小利益）→ 除外
-            #   PER > 15 → スクリーニング条件外 → 除外
             per_raw = raw[_COL_PER].replace(",", "")
-            if per_raw in ("－", "", "N/A"):  # 赤字でPER算出不可
+            if per_raw in ("－", "", "N/A"):
                 continue
             try:
                 per = float(per_raw)
             except ValueError:
                 continue
-            if per <= 0 or per > 15:  # 赤字 or 条件外（60倍超も含む）
+            if per <= 0 or per > 15:
                 continue
 
             try:
@@ -1812,7 +1574,6 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
             except ValueError:
                 volume = 0
 
-            # 営業利益チェック（赤字企業の除外）+ PBR・時価総額・売上成長率取得
             code          = raw[_COL_CODE]
             fin_info      = _get_op_profit(code)
             op_profit       = fin_info["op_profit"]
@@ -1863,49 +1624,27 @@ def get_screened_stocks(max_pages: int = 8, max_results: int = 10) -> list:
 
 
 # ============================================================
-# StockRadar 統合スコア計算
+# スコア計算
 # ============================================================
-def calc_integrated_score(
-    stock_item: dict,
-    wti: dict,
-    world_news: list,
-    edinet_entry: dict | None = None,
-) -> dict:
-    """各銘柄の統合スコアを100点満点で算出する。
-
-    配点:
-      テクニカル   30点  (7指標の買いシグナル数)
-      財務         25点  (ROE・自己資本比率・ROIC・ヘルススコア)
-      モメンタム   20点  (決算進捗・OI成長=営業利益成長)
-      WTIシナリオ  15点  (A=15 / B=8 / C=0)
-      世界情勢     10点  (地政学リスク低=高得点)
-    """
+def calc_integrated_score(stock_item, wti, world_news, edinet_entry=None):
     score = 0
     breakdown = {}
 
-    # ── テクニカル（30点）──
     sig = stock_item.get("signals", {})
     buy_count  = sig.get("buy_count", 0)
     sell_count = sig.get("sell_count", 0)
     tech_score = max(0, min(30, buy_count * 6 - sell_count * 4))
     score += tech_score
-    breakdown["テクニカル"] = (tech_score, 30,
-        f"買{buy_count}指標 売{sell_count}指標")
+    breakdown["テクニカル"] = (tech_score, 30, f"買{buy_count}指標 売{sell_count}指標")
 
-    # ── 財務（25点）──
     fin = stock_item.get("buffett", {})
-    hs  = fin.get("health_score", 0)          # 0〜100
+    hs  = fin.get("health_score", 0)
     fin_score = round(hs / 100 * 25)
     score += fin_score
-    roe = fin.get("roe")
-    eq  = fin.get("equity_ratio")
-    breakdown["財務"] = (fin_score, 25,
-        f"ヘルススコア{hs}/100  ROE:{roe}%  自己資本:{eq}%")
+    breakdown["財務"] = (fin_score, 25, f"ヘルススコア{hs}/100  ROE:{fin.get('roe')}%  自己資本:{fin.get('equity_ratio')}%")
 
-    # ── モメンタム（20点）──
     mom_score = 0
     mom_notes = []
-    # 決算進捗（EDINETデータから）
     if edinet_entry:
         fin_e = edinet_entry.get("financials") or {}
         q     = fin_e.get("quarter") or ""
@@ -1922,7 +1661,6 @@ def calc_integrated_score(
                 mom_notes.append(f"進捗{prog:.0f}%")
             else:
                 mom_notes.append(f"進捗{prog:.0f}%⚠")
-    # 売上成長（財務データから）
     sg = fin.get("sales_growth")
     if sg is not None:
         if sg >= 10:
@@ -1935,10 +1673,8 @@ def calc_integrated_score(
             mom_notes.append(f"売上{sg:.1f}%⚠")
     mom_score = min(20, mom_score)
     score += mom_score
-    breakdown["モメンタム"] = (mom_score, 20,
-        " ".join(mom_notes) if mom_notes else "データなし")
+    breakdown["モメンタム"] = (mom_score, 20, " ".join(mom_notes) if mom_notes else "データなし")
 
-    # ── WTIシナリオ（15点）──
     wti_price = wti.get("price") or 0
     if wti_price < 90:
         wti_score, wti_label = 15, "シナリオA（エントリー可）"
@@ -1947,14 +1683,10 @@ def calc_integrated_score(
     else:
         wti_score, wti_label = 0,  "シナリオC（撤退検討）"
     score += wti_score
-    breakdown["WTIシナリオ"] = (wti_score, 15,
-        f"${wti_price:.1f}  {wti_label}")
+    breakdown["WTIシナリオ"] = (wti_score, 15, f"${wti_price:.1f}  {wti_label}")
 
-    # ── 世界情勢（10点）──
-    # アルジャジーラスコアの平均が低い=地政学リスク低=高得点
     if world_news:
         avg_risk = sum(n.get("score", 0) for n in world_news) / len(world_news)
-        # スコア1〜3=低リスク→10点、4〜6=中→6点、7+=高リスク→2点
         if avg_risk <= 3:
             geo_score, geo_label = 10, "地政学リスク低"
         elif avg_risk <= 6:
@@ -1966,7 +1698,6 @@ def calc_integrated_score(
     score += geo_score
     breakdown["世界情勢"] = (geo_score, 10, geo_label)
 
-    # ── 流動性リスク（減点方式）──
     liquidity = sig.get("liquidity") or {}
     liq_judge = liquidity.get("judge", "unknown")
     liq_label = liquidity.get("label", "--")
@@ -1980,10 +1711,9 @@ def calc_integrated_score(
         liq_penalty = 0
         liq_note = f"流動性OK {liq_label}"
     score += liq_penalty
-    score = max(0, score)  # 0点以下にならないよう調整
+    score = max(0, score)
     breakdown["流動性"] = (liq_penalty, 0, liq_note)
 
-    # ── 総合判定 ──
     if liq_judge == "low" and score < 50:
         rating = "⚠️  流動性不足（売買困難リスク）"
     elif score >= 70:
@@ -1995,43 +1725,27 @@ def calc_integrated_score(
     else:
         rating = "    見送り"
 
-    return {
-        "score":     score,
-        "rating":    rating,
-        "breakdown": breakdown,
-    }
+    return {"score": score, "rating": rating, "breakdown": breakdown}
 
 
 def calc_selection_score(stock_item: dict) -> dict:
-    """① 銘柄選定スコア（財務・流動性のみ・50点満点）
-    WTI・テクニカル・地政学は含まない純粋なファンダメンタルズ評価。
-    配点:
-      財務ヘルス  25点  (ヘルススコア)
-      ROE        10点  (15%以上=10 / 10%以上=6 / それ以下=2)
-      流動性      10点  (OK=10 / warn=5 / low=0)
-      バフェット   5点  (通過=5 / 不通過=0)
-    """
     fin = stock_item.get("buffett", {})
     sig = stock_item.get("signals", {})
 
-    # 財務ヘルス（25点）
     hs = fin.get("health_score", 0)
     fin_score = round(hs / 100 * 25)
 
-    # ROE（10点）
     roe = fin.get("roe") or 0
     if roe >= 15:   roe_score = 10
     elif roe >= 10: roe_score = 6
     else:           roe_score = 2
 
-    # 流動性（10点）
     liq = sig.get("liquidity") or {}
     liq_judge = liq.get("judge", "unknown")
     if liq_judge == "ok":     liq_score = 10
     elif liq_judge == "warn": liq_score = 5
     else:                     liq_score = 0
 
-    # バフェット通過（5点）
     buf_score = 5 if stock_item.get("buffett_passed") else 0
 
     total = fin_score + roe_score + liq_score + buf_score
@@ -2042,28 +1756,20 @@ def calc_selection_score(stock_item: dict) -> dict:
     else:             grade = "C"
 
     return {
-        "score": total,
-        "grade": grade,
-        "fin_score": fin_score,
-        "roe_score": roe_score,
-        "liq_score": liq_score,
-        "buf_score": buf_score,
+        "score": total, "grade": grade,
+        "fin_score": fin_score, "roe_score": roe_score,
+        "liq_score": liq_score, "buf_score": buf_score,
     }
 
 
 def calc_entry_signal(stock_item: dict, wti: dict) -> dict:
-    """② 売買計画スコア（テクニカル+WTIシナリオ・50点満点）
-    配点:
-      テクニカル  30点  (買いシグナル数)
-      WTIシナリオ 20点  (A=20 / B=10 / C=0)
-    """
     sig = stock_item.get("signals", {})
     buy_count  = sig.get("buy_count", 0)
     sell_count = sig.get("sell_count", 0)
     tech_score = max(0, min(30, buy_count * 6 - sell_count * 4))
 
     wti_price = wti.get("price") or 0
-    if wti_price < 90:    wti_score, wti_label = 20, "シナリオA✅"
+    if wti_price < 90:     wti_score, wti_label = 20, "シナリオA✅"
     elif wti_price <= 100: wti_score, wti_label = 10, "シナリオB🟡"
     else:                  wti_score, wti_label = 0,  "シナリオC🔴"
 
@@ -2080,86 +1786,37 @@ def calc_entry_signal(stock_item: dict, wti: dict) -> dict:
         entry_judge = "⚪ 様子見"
 
     return {
-        "score":       total,
-        "tech_score":  tech_score,
-        "wti_score":   wti_score,
-        "wti_label":   wti_label,
-        "entry_judge": entry_judge,
-        "summary":     summary,
-        "buy_count":   buy_count,
-        "sell_count":  sell_count,
+        "score": total, "tech_score": tech_score,
+        "wti_score": wti_score, "wti_label": wti_label,
+        "entry_judge": entry_judge, "summary": summary,
+        "buy_count": buy_count, "sell_count": sell_count,
     }
+
+
+# ============================================================
+# データ査読
+# ============================================================
+def run_data_review(stock_data: list) -> list:
+    alerts = []
+    for item in stock_data:
+        stock = item["stock"]
+        price = item.get("price", {})
+        fin   = item.get("buffett", {})
+        sig   = item.get("signals", {})
+
+        cur = price.get("price")
+        if cur is None:
+            alerts.append(f"{stock['name']}（{stock['code']}）: 株価取得失敗")
+        if fin.get("roe") is None and fin.get("equity_ratio") is None:
+            alerts.append(f"{stock['name']}（{stock['code']}）: 財務データ取得失敗")
+        if sig.get("rsi") is None:
+            alerts.append(f"{stock['name']}（{stock['code']}）: テクニカルデータ取得失敗")
+    return alerts
 
 
 # ============================================================
 # メール本文の組み立て
 # ============================================================
-# ============================================================
-# 査読チェック（データ異常を自動検知）
-# ============================================================
-def run_data_review(stock_data: list) -> list:
-    """
-    収集したデータの異常を自動検知して警告リストを返す。
-    チェック項目：
-      1. PERが異常値（0以下・500以上）
-      2. 決算日が過去になっていないか
-      3. 株価が前日比±20%以上の異常変動
-      4. ROE・自己資本比率がNone（取得失敗）
-      5. 株価がNone（取得失敗）
-    """
-    alerts = []
-    today = date.today()
-
-    for item in stock_data:
-        stock   = item["stock"]
-        buffett = item.get("buffett", {})
-        price   = item.get("price", {})
-        code    = stock["code"]
-        name    = stock["name"]
-
-        # 1. PER異常値チェック
-        per = buffett.get("per")
-        if per is not None:
-            if per <= 0 or per > 500:
-                alerts.append(f"⚠️ [{code}]{name} PER異常値: {per}（要確認）")
-
-        # 2. 決算日が過去になっていないか
-        next_e = stock.get("next_earnings")
-        if next_e:
-            try:
-                e_date = date.fromisoformat(next_e)
-                if e_date < today:
-                    alerts.append(f"⚠️ [{code}]{name} 決算日が過去: {next_e}（更新が必要）")
-            except ValueError:
-                alerts.append(f"⚠️ [{code}]{name} 決算日フォーマット異常: {next_e}")
-
-        # 3. 株価の異常変動チェック（±20%以上）
-        if isinstance(price, dict):
-            chg_pct = price.get("change_pct")
-            if chg_pct is not None:
-                try:
-                    pct = float(chg_pct)
-                    if abs(pct) >= 20:
-                        alerts.append(f"🚨 [{code}]{name} 株価異常変動: {pct:+.1f}%（ストップ高/安の可能性）")
-                except (ValueError, TypeError):
-                    pass
-
-        # 4. ROE・自己資本比率がNone（取得失敗）
-        if buffett.get("roe") is None:
-            alerts.append(f"⚠️ [{code}]{name} ROE取得失敗（株探接続を確認）")
-        if buffett.get("equity_ratio") is None:
-            alerts.append(f"⚠️ [{code}]{name} 自己資本比率取得失敗（株探接続を確認）")
-
-        # 5. 株価がNone（取得失敗）
-        if isinstance(price, dict):
-            if price.get("price") is None:
-                alerts.append(f"⚠️ [{code}]{name} 株価取得失敗（要確認）")
-        elif price is None:
-            alerts.append(f"⚠️ [{code}]{name} 株価取得失敗（要確認）")
-
-    return alerts
-
-
 def build_email_body(
     stock_data: list,
     wti: dict,
@@ -2200,7 +1857,7 @@ def build_email_body(
         "",
     ]
 
-    # 【査読アラート】データ異常チェック
+    # 【査読アラート】
     review_alerts = run_data_review(stock_data)
     if review_alerts:
         lines.append("【査読アラート】⚠️ データ異常を検知しました")
@@ -2215,6 +1872,93 @@ def build_email_body(
         lines.append("【査読】✅ 全銘柄データ正常")
         lines.append("=" * 52)
         lines.append("")
+
+    # ============================================================
+    # 【0】保有ポジション・アラート
+    # ============================================================
+    POSITIONS = [
+        {
+            "code": "1723", "name": "日本電技", "shares": 200,
+            "entry": 2430.0, "cost": 486000,
+            "stop": 2235.6,
+            "t1": 2673.0, "t1_shares": 100, "t1_profit": 24300,
+            "t2": 2904.0, "t2_shares": 100, "t2_profit": 47400,
+        },
+        {
+            "code": "1961", "name": "三機工業", "shares": 100,
+            "entry": 2266.8, "cost": 226680,
+            "stop": 2085.5,
+            "t1": None, "t1_shares": 0, "t1_profit": 0,
+            "t2": 2721.0, "t2_shares": 100, "t2_profit": 45400,
+        },
+    ]
+
+    pos_lines = []
+    pos_lines.append("━" * 52)
+    pos_lines.append(f"📦 保有ポジション確認（{today}）")
+    pos_lines.append("━" * 52)
+    pos_lines.append("")
+
+    for p in POSITIONS:
+        price_data = get_stock_price(p["code"])
+        cur = price_data.get("price") if price_data else None
+        if cur and cur > 0:
+            chg_pct  = (cur - p["entry"]) / p["entry"] * 100
+            upnl     = round((cur - p["entry"]) * p["shares"])
+            sign     = "+" if upnl >= 0 else "▲"
+            chg_s    = f"{chg_pct:+.1f}%"
+            upnl_s   = f"{sign}¥{abs(upnl):,}"
+
+            dist_stop = (cur - p["stop"]) / p["stop"] * 100
+            if dist_stop <= 3:
+                stop_flag = "🔴"
+            elif dist_stop <= 5:
+                stop_flag = "🟡"
+            else:
+                stop_flag = "🟢"
+
+            pos_lines.append(f"【{p['code']} {p['name']}】{p['shares']}株")
+            pos_lines.append(f"  取得単価：¥{p['entry']:,.1f} → 現在：¥{cur:,.0f}（{chg_s}）")
+            pos_lines.append(f"  含み損益：{upnl_s}")
+            pos_lines.append(f"  損切まで：▲{dist_stop:.1f}%（¥{p['stop']:,.1f}）{stop_flag}")
+
+            if p["t1"]:
+                dist_t1 = (p["t1"] - cur) / cur * 100
+                if dist_t1 <= 0:
+                    pos_lines.append(f"  🎉 T1到達！¥{p['t1']:,.0f} → {p['t1_shares']}株売却 +¥{p['t1_profit']:,}確定")
+                elif dist_t1 <= 3:
+                    pos_lines.append(f"  🎯 T1接近！あと+{dist_t1:.1f}%（¥{p['t1']:,.0f}）→ {p['t1_shares']}株売却準備 +¥{p['t1_profit']:,}")
+                else:
+                    pos_lines.append(f"  T1まで：あと+{dist_t1:.1f}%（¥{p['t1']:,.0f}）→ {p['t1_shares']}株売却 +¥{p['t1_profit']:,}")
+
+            dist_t2 = (p["t2"] - cur) / cur * 100
+            if dist_t2 <= 0:
+                pos_lines.append(f"  🎉 T2到達！¥{p['t2']:,.0f} → {p['t2_shares']}株売却 +¥{p['t2_profit']:,}確定")
+            elif dist_t2 <= 3:
+                pos_lines.append(f"  🎯 T2接近！あと+{dist_t2:.1f}%（¥{p['t2']:,.0f}）→ {p['t2_shares']}株売却準備 +¥{p['t2_profit']:,}")
+            else:
+                pos_lines.append(f"  T2まで：あと+{dist_t2:.1f}%（¥{p['t2']:,.0f}）→ {p['t2_shares']}株売却 +¥{p['t2_profit']:,}")
+
+            alerts = []
+            if dist_stop <= 3:
+                alerts.append(f"  🚨 損切接近！¥{cur:,.0f} → 即時売却判断（損切ライン¥{p['stop']:,.1f}）")
+            elif dist_stop <= 5:
+                alerts.append(f"  ⚠️ 損切ライン注意（あと▲{dist_stop:.1f}%で損切）")
+            if p["t1"] and 0 < (p["t1"] - cur) / cur * 100 <= 3:
+                alerts.append(f"  🎯 T1利確ライン接近！¥{p['t1']:,.0f}まであと+{(p['t1']-cur)/cur*100:.1f}%")
+            if 0 < dist_t2 <= 3:
+                alerts.append(f"  🎯 T2利確ライン接近！¥{p['t2']:,.0f}まであと+{dist_t2:.1f}%")
+            for al in alerts:
+                pos_lines.append(al)
+        else:
+            pos_lines.append(f"【{p['code']} {p['name']}】{p['shares']}株")
+            pos_lines.append(f"  取得単価：¥{p['entry']:,.1f} → 現在：取得失敗")
+
+        pos_lines.append("")
+
+    pos_lines.append("━" * 52)
+    pos_lines.append("")
+    lines.extend(pos_lines)
 
     # 【1】今日の結論
     lines.append("【1】今日の結論")
@@ -2241,41 +1985,8 @@ def build_email_body(
             lines.append("  下落業種: " + " / ".join(f"{s['name']}{s['change_pct']:+.1f}%" for s in down))
         lines.append("")
 
-    # 仕込みウィンドウ計算（決算3〜6週間前が仕込み時期）
-    from datetime import date as _date, timedelta as _timedelta
-    _today = _date.today()
-
-    def _calc_entry_window(next_earnings_str):
-        """決算日から仕込み開始・終了日を計算する。"""
-        if not next_earnings_str:
-            return None, None, None
-        try:
-            e_date = _date.fromisoformat(next_earnings_str)
-            days_to = (e_date - _today).days
-            window_start = e_date - _timedelta(weeks=6)
-            window_end   = e_date - _timedelta(weeks=3)
-            in_window = window_start <= _today <= window_end
-            return days_to, in_window, window_start
-        except:
-            return None, None, None
-
-    # ベスト3候補の抽出（スコア＋仕込みウィンドウを加味）
-    def _calc_total_score(d):
-        base = d.get("score") or 0
-        st = d["stock"]
-        next_e = st.get("next_earnings")
-        days_to, in_window, _ = _calc_entry_window(next_e)
-        # 仕込みウィンドウ内なら+10点ボーナス
-        if in_window:
-            base += 10
-        # 決算が近すぎる（2週間以内）は-5点
-        if days_to is not None and 0 < days_to <= 14:
-            base -= 5
-        return base
-
-    ranked = sorted(stock_data, key=lambda x: -_calc_total_score(x))
-
-    lines.append("  🏆 ベスト3候補（スコア＋仕込み時期）")
+    lines.append("  📊 注目銘柄トップ3")
+    ranked = sorted(stock_data, key=lambda x: -(x.get("score") or 0))
     for i, d in enumerate(ranked[:3], 1):
         st    = d["stock"]
         pr    = d.get("price", {})
@@ -2284,27 +1995,12 @@ def build_email_body(
         price_str = f"¥{pr['price']:,.0f}" if pr.get("price") else "--"
         peg_v = bf.get("peg")
         ni_v  = bf.get("ni_forecast_yoy")
-        next_e = st.get("next_earnings")
-        days_to, in_window, window_start = _calc_entry_window(next_e)
-
         parts = []
         if peg_v: parts.append(f"PEG{peg_v:.2f}{'✓' if peg_v<=1 else ''}")
         if ni_v is not None: parts.append(f"来期{ni_v:+.1f}%")
         if tags: parts.append(tags[0])
-
         lines.append(f"  {i}位 {st['code']} {st['name']}  {price_str}")
         if parts: lines.append(f"       {' / '.join(parts)}")
-
-        # 仕込み時期の表示
-        if days_to is not None and days_to > 0:
-            if in_window:
-                lines.append(f"       🟢 仕込みウィンドウ中！決算まであと{days_to}日")
-            elif days_to > 42:  # 6週間以上先
-                lines.append(f"       ⏳ 仕込み開始: {window_start.strftime('%m/%d')}〜（あと{(window_start - _today).days}日）")
-            elif days_to <= 14:
-                lines.append(f"       ⚠️ 決算直前（あと{days_to}日）様子見推奨")
-            else:
-                lines.append(f"       📅 決算まであと{days_to}日")
     lines.append("")
     lines.append("=" * 52)
     lines.append("")
@@ -2373,30 +2069,6 @@ def build_email_body(
             days_left = (ed - _date.today()).days
             if days_left >= 0:
                 lines.append(f"  📅 次回決算: {next_e}（あと{days_left}日）{(' ★'+e_note) if e_note else ''}")
-                if days_left <= 3:
-                    lines.append("  🎯 行動指針: 決算当日直前 → 逆指値・指値を最終確認")
-                elif days_left <= 7:
-                    lines.append("  🎯 行動指針: 決算直前1週間 → 新規エントリー不可・逆指値確認")
-                elif days_left <= 14:
-                    lines.append("  🎯 行動指針: 決算2週間前 → 新規見送り・既存ポジション維持")
-                elif days_left <= 42:
-                    lines.append("  🎯 行動指針: 🟢仕込みウィンドウ → エントリー検討タイミング")
-                else:
-                    lines.append("  🎯 行動指針: ⏳今は観察期間 → 仕込みは6週間前から")
-
-
-        margin = item.get("margin")
-        if margin and margin.get("ratio") is not None:
-            ratio = margin["ratio"]
-            if ratio >= 10:
-                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d \u26a0\ufe0f \u9ad8\u6c34\u6e96\uff08\u8fd4\u6e08\u58f2\u308a\u5727\u529b\u306b\u6ce8\u610f\uff09")
-                lines.append("     \u203b\u4fe1\u7528\u500d\u738710\u500d\u8d85\u306f\u5c06\u6765\u306e\u58f2\u308a\u5727\u529b\u304c\u5f37\u307e\u308b\u30ea\u30b9\u30af\u3042\u308a")
-            elif ratio >= 5:
-                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d \u25b3 \u3084\u3084\u9ad8\u3081")
-            elif ratio <= 1:
-                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d \U0001f7e2 \u4f4e\u6c34\u6e96\uff08\u8e0f\u307f\u4e0a\u3052\u671f\u5f85\uff09")
-            else:
-                lines.append(f"  \U0001f4ca \u4fe1\u7528\u500d\u7387: {ratio}\u500d")
 
         peg_v = f.get("peg")
         if passed or (peg_v and peg_v <= 1):
@@ -2447,7 +2119,7 @@ def build_email_body(
 
         if news:
             n  = news[0]
-            dt = n["pub_date"][:10] if n.get("pub_date") else "-"
+            dt = n.get("pub_date", n.get("date", "-"))[:10] if (n.get("pub_date") or n.get("date")) else "-"
             lines.append(f"  📰 {dt} {n['title']}")
             if n.get("url"):
                 lines.append(f"     {n['url']}")
@@ -2586,7 +2258,6 @@ def build_email_body(
 
 
 def _build_html(body: str) -> str:
-    """テキスト本文をスマホ対応HTMLに変換する。"""
     def esc(s: str) -> str:
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -2595,12 +2266,10 @@ def _build_html(body: str) -> str:
         raw = line.rstrip()
         e   = esc(raw)
 
-        # 区切り線
         if set(raw.strip()) <= {"=", "─", "-"} and len(raw.strip()) >= 10:
             html_lines.append('<hr style="border:none;border-top:1px solid #444;margin:12px 0;">')
             continue
 
-        # セクションヘッダー（▼ で始まる行）
         if raw.startswith("▼"):
             html_lines.append(
                 f'<div style="font-size:15px;font-weight:bold;color:#4fc3f7;'
@@ -2608,17 +2277,14 @@ def _build_html(body: str) -> str:
             )
             continue
 
-        # 総合判定行（★ で始まる）
         if "★★★" in raw:
             html_lines.append(
-                f'<div style="font-size:14px;color:#ff5252;font-weight:bold;'
-                f'padding:2px 0;">{e}</div>'
+                f'<div style="font-size:14px;color:#ff5252;font-weight:bold;padding:2px 0;">{e}</div>'
             )
             continue
         if "★★" in raw and "★★★" not in raw:
             html_lines.append(
-                f'<div style="font-size:14px;color:#ffab40;font-weight:bold;'
-                f'padding:2px 0;">{e}</div>'
+                f'<div style="font-size:14px;color:#ffab40;font-weight:bold;padding:2px 0;">{e}</div>'
             )
             continue
         if raw.strip().startswith("★") and "★★" not in raw:
@@ -2627,48 +2293,38 @@ def _build_html(body: str) -> str:
             )
             continue
 
-        # シナリオ判定
         if "シナリオA" in raw and "🟢" in raw:
             html_lines.append(
-                f'<div style="font-size:14px;color:#66bb6a;font-weight:bold;'
-                f'padding:4px 0;">{e}</div>'
+                f'<div style="font-size:14px;color:#66bb6a;font-weight:bold;padding:4px 0;">{e}</div>'
             )
             continue
         if "シナリオB" in raw and "🟡" in raw:
             html_lines.append(
-                f'<div style="font-size:14px;color:#ffd54f;font-weight:bold;'
-                f'padding:4px 0;">{e}</div>'
+                f'<div style="font-size:14px;color:#ffd54f;font-weight:bold;padding:4px 0;">{e}</div>'
             )
             continue
         if "シナリオC" in raw and "🔴" in raw:
             html_lines.append(
-                f'<div style="font-size:14px;color:#ef5350;font-weight:bold;'
-                f'padding:4px 0;">{e}</div>'
+                f'<div style="font-size:14px;color:#ef5350;font-weight:bold;padding:4px 0;">{e}</div>'
             )
             continue
 
-        # 銘柄名行（✔ or ✘ or 【 を含む見出し的な行）
         if ("✔" in raw or "✘" in raw) and ("（" in raw):
             color = "#66bb6a" if "✔" in raw else "#ef5350"
             html_lines.append(
-                f'<div style="font-size:14px;font-weight:bold;color:{color};'
-                f'margin-top:10px;">{e}</div>'
+                f'<div style="font-size:14px;font-weight:bold;color:{color};margin-top:10px;">{e}</div>'
             )
             continue
 
-        # 空行
         if not raw.strip():
             html_lines.append('<div style="height:6px;"></div>')
             continue
 
-        # URLをボタンに変換（httpで始まる行）- 前の行に続けて表示
         if raw.strip().startswith("http"):
             url = raw.strip()
-            # 前の通常行の末尾に▶ボタンを追加（前の行を置き換え）
             if html_lines and 'word-break:break-all' in html_lines[-1]:
                 prev = html_lines.pop()
-                # 閉じdivの前にボタンを挿入
-                prev = prev.replace('</div>', 
+                prev = prev.replace('</div>',
                     f' <a href="{url}" style="display:inline;margin-left:6px;'
                     f'padding:2px 8px;background:#2a2a2a;border:1px solid #555;'
                     f'border-radius:4px;color:#4fc3f7;font-size:11px;'
@@ -2683,10 +2339,8 @@ def _build_html(body: str) -> str:
                 )
             continue
 
-        # 通常行
         html_lines.append(
-            f'<div style="font-size:13px;color:#ddd;line-height:1.7;'
-            f'word-break:break-all;">{e}</div>'
+            f'<div style="font-size:13px;color:#ddd;line-height:1.7;word-break:break-all;">{e}</div>'
         )
 
     return """<!DOCTYPE html>
@@ -2711,21 +2365,13 @@ def send_email(subject: str, body: str) -> None:
     })
     print("メール送信完了")
 
+
 # ============================================================
 # メイン処理
 # ============================================================
 def main():
     print("=== IR通知スクリプト 開始 ===")
 
-    # 決算発表予定日を株探から自動取得してSTOCKSを更新
-    print("  決算発表予定日を株探から取得中...")
-    earnings_dates = fetch_all_earnings_dates(STOCKS)
-    for stock in STOCKS:
-        auto_date = earnings_dates.get(stock["code"])
-        if auto_date:
-            stock["next_earnings"] = auto_date  # 自動取得した日付で上書き
-
-    # 各銘柄のデータ収集
     stock_data = []
     for stock in STOCKS:
         print(f"  [{stock['code']}] {stock['name']} を取得中...")
@@ -2734,26 +2380,22 @@ def main():
         price      = get_stock_price(stock["code"])
         news       = get_stock_news(stock["code"]) if passed else []
         signals    = get_technical_signals(stock["code"])
-        margin     = get_margin_ratio(stock["code"])
         print(f"    バフェット: {'✔ 通過' if passed else '✘ 不通過'} "
               f"ROE={buffett['roe']} 自己資本比率={buffett['equity_ratio']}")
         stock_data.append({
             "stock": stock, "buffett": buffett, "buffett_passed": passed,
-            "price": price, "news": news, "signals": signals, "margin": margin,
+            "price": price, "news": news, "signals": signals,
         })
 
-    # 日経平均・東証33業種
     print("  日経平均を取得中...")
     nikkei = get_nikkei_data()
     print("  東証33業種トレンドを取得中...")
     sectors = get_sector_trends()
     print(f"  東証33業種: {len(sectors)}業種取得")
 
-    # WTI 価格取得
     print("  WTI 原油価格を取得中...")
     wti = get_wti_price()
 
-    # 世界情勢ニュース取得
     print("  アルジャジーラRSSを取得中...")
     world_news = get_aljazeera_news()
     if ANTHROPIC_API_KEY:
@@ -2766,26 +2408,22 @@ def main():
     print("  NHK 関税・地政学リスクニュースを取得中...")
     nhk_risk_news = get_nhk_risk_news()
 
-    # 決算進捗取得（EDINET APIキーが設定されている場合のみ）
     if EDINET_API_KEY:
         edinet_data = get_edinet_financials(STOCKS)
     else:
         print("  EDINET_API_KEY 未設定のため決算進捗をスキップ")
         edinet_data = []
 
-    # Buffett視点分析
     if ANTHROPIC_API_KEY:
         print("  Claude Haiku でBuffett視点分析中...")
         buffett_analysis = analyze_with_buffett_lens(stock_data)
     else:
         buffett_analysis = {}
 
-    # 銘柄スクリーニング
     print("  銘柄スクリーニング中 (出来高急増ランキング 最大8ページ)...")
     screened = get_screened_stocks()
     print(f"  スクリーニング結果: {len(screened)}件")
 
-    # コーポレートアクション取得
     print("  コーポレートアクション情報を取得中...")
     try:
         corp_actions = get_corporate_actions(STOCKS)
@@ -2793,7 +2431,6 @@ def main():
         print(f"  コーポレートアクション取得失敗: {e}")
         corp_actions = {}
 
-    # メール組み立て・送信
     today   = date.today().strftime("%Y/%m/%d")
     subject = f"[IR通知] {today} 銘柄ニュース・WTI価格・世界情勢"
     body    = build_email_body(stock_data, wti, world_news, edinet_data, screened,
