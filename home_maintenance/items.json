@@ -88,5 +88,14 @@
     "warn_days": 14,
     "alert_days": 30,
     "note": "3ヶ月ごと清掃"
+  },
+  {
+    "id": "stockfood_hamburger",
+    "name": "備蓄食材 常温ハンバーグ（石井食品）",
+    "interval_days": 466,
+    "notify_before_days": 30,
+    "warn_days": 60,
+    "alert_days": 90,
+    "note": "賞味期限 2027年9月"
   }
 ]
