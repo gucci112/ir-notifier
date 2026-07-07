@@ -1160,10 +1160,18 @@ def get_margin_ratio(code: str):
         lines = [l.strip() for l in soup.get_text().split("\n")]
         for i, line in enumerate(lines):
             if line == "信用倍率":
+                vals = []
                 for j in range(i+1, min(i+15, len(lines))):
-                    m = _re.search(r"([\d.]+)倍", lines[j])
-                    if m:
-                        return {"ratio": float(m.group(1))}
+                    mm = _re.search(r"^([\d.]+)倍$", lines[j])
+                    if mm:
+                        vals.append(float(mm.group(1)))
+                    if len(vals) >= 3:
+                        break
+                if len(vals) >= 3:
+                    return {"ratio": vals[2]}
+                elif vals:
+                    return {"ratio": vals[-1]}
+                break
     except Exception as e:
         print(f"    [警告] {code} 信用倍率取得失敗: {e}")
     return None
