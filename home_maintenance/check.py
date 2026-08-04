@@ -149,16 +149,12 @@ def build_html_email(rows: list[dict], today: date) -> str:
         return f"""
         <tr>
           <td style="padding:14px 16px;background:{bg};border-bottom:1px solid #e8e8e8;">
-            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-              <div>
-                <div style="font-weight:600;font-size:15px;color:#1a1a1a;">{r["name"]}</div>
-                <div style="font-size:12px;color:#888;margin-top:2px;">{r["note"]} ／ 最終交換：{r["last_replaced"]} ／ 次回：{r["next_date"]}</div>
-                {memo_html}
-              </div>
-              <div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">
-                <span style="background:{badge_bg};color:{badge_fg};padding:4px 10px;border-radius:12px;font-size:13px;font-weight:600;white-space:nowrap;">{label}</span>
-                <a href="{update_url}" style="background:#2d3748;color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;text-decoration:none;white-space:nowrap;">交換を記録</a>
-              </div>
+            <div style="font-weight:600;font-size:16px;color:#1a1a1a;margin-bottom:4px;">{r["name"]}</div>
+            <div style="font-size:12px;color:#888;margin-bottom:8px;">{r["note"]} ／ 最終交換：{r["last_replaced"]} ／ 次回：{r["next_date"]}</div>
+            {memo_html}
+            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
+              <span style="background:{badge_bg};color:{badge_fg};padding:5px 12px;border-radius:12px;font-size:14px;font-weight:600;">{label}</span>
+              <a href="{update_url}" style="background:#2d3748;color:#fff;padding:5px 12px;border-radius:6px;font-size:13px;text-decoration:none;">交換を記録</a>
             </div>
           </td>
         </tr>"""
