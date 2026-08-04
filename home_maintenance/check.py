@@ -147,17 +147,15 @@ def build_html_email(rows: list[dict], today: date) -> str:
         memo_html = f'<div style="color:#888;font-size:12px;margin-top:4px;">{r["memo"]}</div>' if r["memo"] else ""
 
         return f"""
-        <tr>
-          <td style="padding:14px 16px;background:{bg};border-bottom:1px solid #e8e8e8;">
-            <div style="font-weight:600;font-size:16px;color:#1a1a1a;margin-bottom:4px;">{r["name"]}</div>
-            <div style="font-size:12px;color:#888;margin-bottom:8px;">{r["note"]} ／ 最終交換：{r["last_replaced"]} ／ 次回：{r["next_date"]}</div>
-            {memo_html}
-            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
-              <span style="background:{badge_bg};color:{badge_fg};padding:5px 12px;border-radius:12px;font-size:14px;font-weight:600;">{label}</span>
-              <a href="{update_url}" style="background:#2d3748;color:#fff;padding:5px 12px;border-radius:6px;font-size:13px;text-decoration:none;">交換を記録</a>
-            </div>
-          </td>
-        </tr>"""
+        <div style="padding:16px;background:{bg};border-bottom:2px solid #e8e8e8;">
+          <div style="font-weight:700;font-size:17px;color:#1a1a1a;margin-bottom:6px;">{r["name"]}</div>
+          <div style="font-size:13px;color:#666;margin-bottom:10px;">{r["note"]} ／ 最終：{r["last_replaced"]} ／ 次回：{r["next_date"]}</div>
+          {memo_html}
+          <div style="display:flex;gap:10px;align-items:center;">
+            <span style="background:{badge_bg};color:{badge_fg};padding:7px 14px;border-radius:20px;font-size:15px;font-weight:700;">{label}</span>
+            <a href="{update_url}" style="background:#4a5568;color:#fff;padding:7px 14px;border-radius:8px;font-size:14px;text-decoration:none;font-weight:600;">交換を記録</a>
+          </div>
+        </div>"""
 
     rows_html = "\n".join(item_row_html(r) for r in rows)
 
@@ -180,33 +178,31 @@ def build_html_email(rows: list[dict], today: date) -> str:
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>ホームメンテナンス通知</title>
 </head>
-<body style="margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;">
-  <div style="max-width:600px;margin:20px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+<body style="margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Hiragino Sans',sans-serif;-webkit-text-size-adjust:100%;">
+  <div style="width:100%;max-width:100%;background:#fff;">
 
     <!-- ヘッダー -->
-    <div style="background:linear-gradient(135deg,#2d3748,#4a5568);padding:24px 20px;text-align:center;">
+    <div style="background:#2d3748;padding:20px 16px;text-align:center;">
       <div style="font-size:28px;margin-bottom:6px;">🏠</div>
-      <div style="color:#fff;font-size:18px;font-weight:700;">ホームメンテナンス</div>
-      <div style="color:#a0aec0;font-size:13px;margin-top:4px;">{today.strftime("%Y年%m月%d日")} 時点</div>
+      <div style="color:#fff;font-size:20px;font-weight:700;">ホームメンテナンス</div>
+      <div style="color:#a0aec0;font-size:14px;margin-top:4px;">{today.strftime("%Y年%m月%d日")} 時点</div>
     </div>
 
     <!-- サマリー -->
-    <div style="padding:16px 20px;background:#f7fafc;border-bottom:1px solid #e8e8e8;text-align:center;font-size:14px;">
+    <div style="padding:14px 16px;background:#f7fafc;border-bottom:2px solid #e8e8e8;text-align:center;font-size:16px;">
       {summary_html}
     </div>
 
     <!-- 品目一覧 -->
-    <table style="width:100%;border-collapse:collapse;">
-      {rows_html}
-    </table>
+    {rows_html}
 
     <!-- フッター -->
-    <div style="padding:16px 20px;text-align:center;border-top:1px solid #e8e8e8;">
-      <a href="{update_all_url}" style="display:inline-block;background:#4a5568;color:#fff;padding:10px 24px;border-radius:8px;font-size:14px;text-decoration:none;font-weight:600;">📋 交換記録ページを開く</a>
-      <div style="color:#aaa;font-size:11px;margin-top:12px;">ir-notifier / home-maintenance</div>
+    <div style="padding:20px 16px;text-align:center;border-top:1px solid #e8e8e8;background:#f7fafc;">
+      <a href="{update_all_url}" style="display:block;background:#4a5568;color:#fff;padding:14px 24px;border-radius:8px;font-size:16px;text-decoration:none;font-weight:600;">📋 交換記録ページを開く</a>
+      <div style="color:#aaa;font-size:12px;margin-top:12px;">ir-notifier / home-maintenance</div>
     </div>
 
   </div>
