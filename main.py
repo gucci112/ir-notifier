@@ -1913,8 +1913,8 @@ def build_email_body(
     # 【0】保有ポジション・アラート
     # ============================================================
     POSITIONS = [
-        {"code": "3150", "name": "グリムス", "shares": 100, "entry": 2428.0, "stop": 2234.0, "t1": 2800.0, "t1_shares": 100, "t1_profit": 37200, "t2": 3185.0, "t2_shares": 100, "t2_profit": 75700},
-    ]  # 2026-06-17 グリムス100株@2428
+        {"code": "8306", "name": "三菱UFJ", "shares": 100, "entry": 3515.9, "stop": 3234.6, "t1": 4394.9, "t1_shares": 100, "t1_profit": 87900, "t2": None, "t2_shares": None, "t2_profit": None},
+    ]  # 2026-08-10 三菱UFJ100株@3515.9
 
     pos_lines = []
     pos_lines.append("━" * 52)
@@ -1954,13 +1954,15 @@ def build_email_body(
                 else:
                     pos_lines.append(f"  T1まで：あと+{dist_t1:.1f}%（¥{p['t1']:,.0f}）→ {p['t1_shares']}株売却 +¥{p['t1_profit']:,}")
 
-            dist_t2 = (p["t2"] - cur) / cur * 100
-            if dist_t2 <= 0:
-                pos_lines.append(f"  🎉 T2到達！¥{p['t2']:,.0f} → {p['t2_shares']}株売却 +¥{p['t2_profit']:,}確定")
-            elif dist_t2 <= 3:
-                pos_lines.append(f"  🎯 T2接近！あと+{dist_t2:.1f}%（¥{p['t2']:,.0f}）→ {p['t2_shares']}株売却準備 +¥{p['t2_profit']:,}")
-            else:
-                pos_lines.append(f"  T2まで：あと+{dist_t2:.1f}%（¥{p['t2']:,.0f}）→ {p['t2_shares']}株売却 +¥{p['t2_profit']:,}")
+            dist_t2 = None
+            if p["t2"]:
+                dist_t2 = (p["t2"] - cur) / cur * 100
+                if dist_t2 <= 0:
+                    pos_lines.append(f"  🎉 T2到達！¥{p['t2']:,.0f} → {p['t2_shares']}株売却 +¥{p['t2_profit']:,}確定")
+                elif dist_t2 <= 3:
+                    pos_lines.append(f"  🎯 T2接近！あと+{dist_t2:.1f}%（¥{p['t2']:,.0f}）→ {p['t2_shares']}株売却準備 +¥{p['t2_profit']:,}")
+                else:
+                    pos_lines.append(f"  T2まで：あと+{dist_t2:.1f}%（¥{p['t2']:,.0f}）→ {p['t2_shares']}株売却 +¥{p['t2_profit']:,}")
 
             alerts = []
             if dist_stop <= 3:
@@ -1969,7 +1971,7 @@ def build_email_body(
                 alerts.append(f"  ⚠️ 損切ライン注意（あと▲{dist_stop:.1f}%で損切）")
             if p["t1"] and 0 < (p["t1"] - cur) / cur * 100 <= 3:
                 alerts.append(f"  🎯 T1利確ライン接近！¥{p['t1']:,.0f}まであと+{(p['t1']-cur)/cur*100:.1f}%")
-            if 0 < dist_t2 <= 3:
+            if p["t2"] and 0 < dist_t2 <= 3:
                 alerts.append(f"  🎯 T2利確ライン接近！¥{p['t2']:,.0f}まであと+{dist_t2:.1f}%")
             for al in alerts:
                 pos_lines.append(al)
