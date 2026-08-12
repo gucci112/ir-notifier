@@ -4,7 +4,7 @@
     "memo": ""
   },
   "shower_head": {
-    "last_replaced": "2025-12-03",
+    "last_replaced": "2026-06-04",
     "memo": ""
   },
   "auto_server": {
@@ -16,19 +16,19 @@
     "memo": ""
   },
   "aquarium_water": {
-    "last_replaced": "2026-04-19",
+    "last_replaced": "2026-08-02",
     "memo": ""
   },
   "aquarium_filter": {
-    "last_replaced": "2026-01-01",
-    "memo": ""
+    "last_replaced": "2026-08-02",
+    "memo": "Ã£ÂÂÃ£ÂÂ£Ã£ÂÂ«Ã£ÂÂ¿Ã£ÂÂ¼Ã¥ÂÂ¨Ã£ÂÂ¦Ã¦ÂÂ°Ã¥ÂÂÃ£ÂÂ«Ã¤ÂºÂ¤Ã¦ÂÂ"
   },
   "office_water_filter": {
-    "last_replaced": "2025-01-01",
+    "last_replaced": "2026-08-11",
     "memo": ""
   },
   "kitchen_fan_filter": {
-    "last_replaced": "2026-05-24",
+    "last_replaced": "2026-08-02",
     "memo": ""
   },
   "home_server_glass": {
@@ -36,7 +36,11 @@
     "memo": ""
   },
   "office_server_glass": {
-    "last_replaced": "",
+    "last_replaced": "2026-08-11",
     "memo": "日程未定"
+  },
+  "stockfood_hamburger": {
+    "last_replaced": "2026-06-21",
+    "memo": "Ã¨Â³ÂÃ¥ÂÂ³Ã¦ÂÂÃ©ÂÂ2027-09-30"
   }
 }

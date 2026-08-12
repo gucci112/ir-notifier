@@ -1142,6 +1142,41 @@ def _calc_liquidity(closes: list, volumes: list) -> dict:
     return {"avg_volume_yen": round(avg), "judge": judge, "label": label}
 
 
+
+# ============================================================
+# 信用倍率取得（kabutan.jp）
+# ============================================================
+def get_margin_ratio(code: str):
+    """kabutan.jpから信用倍率を取得する"""
+    try:
+        session = _get_kabutan_session()
+        resp = session.get(
+            f"https://kabutan.jp/stock/?code={code}",
+            headers={"Referer": "https://kabutan.jp/"},
+            timeout=15
+        )
+        import re as _re
+        from bs4 import BeautifulSoup as _BS
+        soup = _BS(resp.text, "html.parser")
+        lines = [l.strip() for l in soup.get_text().split("\n")]
+        for i, line in enumerate(lines):
+            if line == "信用倍率":
+                vals = []
+                for j in range(i+1, min(i+15, len(lines))):
+                    mm = _re.search(r"^([\d.]+)倍$", lines[j])
+                    if mm:
+                        vals.append(float(mm.group(1)))
+                    if len(vals) >= 3:
+                        break
+                if len(vals) >= 3:
+                    return {"ratio": vals[2]}
+                elif vals:
+                    return {"ratio": vals[-1]}
+                break
+    except Exception as e:
+        print(f"    [警告] {code} 信用倍率取得失敗: {e}")
+    return None
+
 def get_technical_signals(code: str) -> dict:
     try:
         closes, volumes = _fetch_yahoo_full(f"{code}.T", range_="90d")
@@ -1878,21 +1913,8 @@ def build_email_body(
     # 【0】保有ポジション・アラート
     # ============================================================
     POSITIONS = [
-        {
-            "code": "1723", "name": "日本電技", "shares": 200,
-            "entry": 2430.0, "cost": 486000,
-            "stop": 2235.6,
-            "t1": 2673.0, "t1_shares": 100, "t1_profit": 24300,
-            "t2": 2904.0, "t2_shares": 100, "t2_profit": 47400,
-        },
-        {
-            "code": "1961", "name": "三機工業", "shares": 100,
-            "entry": 2266.8, "cost": 226680,
-            "stop": 2085.5,
-            "t1": None, "t1_shares": 0, "t1_profit": 0,
-            "t2": 2721.0, "t2_shares": 100, "t2_profit": 45400,
-        },
-    ]
+        {"code": "3150", "name": "グリムス", "shares": 100, "entry": 2428.0, "stop": 2234.0, "t1": 2800.0, "t1_shares": 100, "t1_profit": 37200, "t2": 3185.0, "t2_shares": 100, "t2_profit": 75700},
+    ]  # 2026-06-17 グリムス100株@2428
 
     pos_lines = []
     pos_lines.append("━" * 52)
@@ -2061,6 +2083,22 @@ def build_email_body(
         lines.append(f"  {macd_s}  {bb_s}  {cr_s}")
         lines.append(f"  流動性:{liq}")
         lines.append(f"  → {sig_str}")
+
+        margin = item.get("margin")
+        if margin and margin.get("ratio") is not None:
+            ratio = margin["ratio"]
+            if ratio >= 15:
+                lines.append(f"  📊 信用倍率: {ratio}倍 ⚠️ 高水準（返済売り圧力に注意）")
+                lines.append("     ※信用倍率10倍超は将来の売り圧力が強まるリスクあり")
+            elif ratio >= 10:
+                lines.append(f"  📊 信用倍率: {ratio}倍 ⚠️ 高水準（返済売り圧力に注意）")
+                lines.append("     ※信用倍率10倍超は将来の売り圧力が強まるリスクあり")
+            elif ratio >= 5:
+                lines.append(f"  📊 信用倍率: {ratio}倍 △ やや高め")
+            elif ratio <= 1:
+                lines.append(f"  📊 信用倍率: {ratio}倍 🟢 低水準（踏み上げ期待）")
+            else:
+                lines.append(f"  📊 信用倍率: {ratio}倍")
 
         next_e = stock.get("next_earnings")
         e_note = stock.get("earnings_note", "")
@@ -2386,11 +2424,12 @@ def main():
         price      = get_stock_price(stock["code"])
         news       = get_stock_news(stock["code"]) if passed else []
         signals    = get_technical_signals(stock["code"])
+        margin     = get_margin_ratio(stock["code"])
         print(f"    バフェット: {'✔ 通過' if passed else '✘ 不通過'} "
               f"ROE={buffett['roe']} 自己資本比率={buffett['equity_ratio']}")
         stock_data.append({
             "stock": stock, "buffett": buffett, "buffett_passed": passed,
-            "price": price, "news": news, "signals": signals,
+            "price": price, "news": news, "signals": signals, "margin": margin,
         })
 
     print("  日経平均を取得中...")
