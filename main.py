@@ -561,6 +561,7 @@ def get_world_business_news(max_items: int = 5) -> tuple[list, str]:
                         "title":    title,
                         "url":      link,
                         "pub_date": pub_date,
+                        "desc":     desc,
                     })
 
             if scored:
@@ -2166,13 +2167,18 @@ def build_email_body(
             import anthropic as _ac
             _client = _ac.Anthropic()
             _titles = "\n".join([
-                f"{i+1}. {n['title']} ({n['pub_date'][:10] if n['pub_date'] else '-'})"
+                f"{i+1}. {n['title']}"
+                + (f" — {n['desc']}" if n.get('desc') else "")
+                + f" ({n['pub_date'][:10] if n['pub_date'] else '-'})"
                 for i, n in enumerate(reuters_news)
             ])
             _prompt = (
-                "以下のニュース見出しから、日本株の株価に影響しそうなものだけを選び、"
+                "以下は海外ビジネスニュースの見出しと概要です。"
+                "日本株の株価に影響しそうなものだけを選び、"
                 "各記事を1〜2行の日本語で要約してください。\n"
-                "関係ないものは除外してください。\n"
+                "概要が空欄の記事は見出しのみから判断してください。\n"
+                "関係ないものは除外し、余計な前置きや言い訳は書かず、"
+                "該当がなければ「関連ニュースなし」とだけ出力してください。\n"
                 "形式: [番号] 要約文\n\n" + _titles
             )
             _resp = _client.messages.create(
