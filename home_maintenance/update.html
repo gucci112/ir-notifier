@@ -421,9 +421,12 @@ async function submitRecord() {
       memo: memo,
     };
 
-    const newContent = btoa(unescape(encodeURIComponent(
-      JSON.stringify(currentHistory, null, 2) + "\n"
-    )));
+    const jsonStr = JSON.stringify(currentHistory, null, 2) + "\n";
+    const encoder = new TextEncoder();
+    const bytes = encoder.encode(jsonStr);
+    let binary = "";
+    bytes.forEach(b => binary += String.fromCharCode(b));
+    const newContent = btoa(binary);
 
     const item = itemsData.find(i => i.id === id);
     const putRes = await fetch(url, {
