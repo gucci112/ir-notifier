@@ -1913,8 +1913,8 @@ def build_email_body(
     # 【0】保有ポジション・アラート
     # ============================================================
     POSITIONS = [
-        {"code": "8306", "name": "三菱UFJ", "shares": 100, "entry": 3515.9, "stop": 3234.6, "t1": 4394.9, "t1_shares": 100, "t1_profit": 87900, "t2": None, "t2_shares": None, "t2_profit": None},
-    ]  # 2026-08-10 三菱UFJ100株@3515.9
+        {"code": "8306", "name": "三菱UFJ", "shares": 100, "entry": 3657.0, "stop": 3364.4, "t1": 4571.3, "t1_shares": 100, "t1_profit": 91430, "t2": None, "t2_shares": None, "t2_profit": None},
+    ]  # 2026-09-02 三菱UFJ100株@3657.0（再エントリー）
 
     pos_lines = []
     pos_lines.append("━" * 52)
